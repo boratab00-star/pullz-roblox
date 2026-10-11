@@ -76,9 +76,9 @@ pcall(function() Mouse = LocalPlayer:GetMouse() end)
 local Config = {
     -- Auto Jobs & Work
     AutoDelivery = false,
-    DeliverySpeed = 65,
-    MopedBoost = true,
-    MopedSpeed = 95,
+    DeliverySpeed = 22,
+    MopedBoost = false,
+    MopedSpeed = 38,
     AutoBaker = false,
     AutoHairdresser = false,
     AutoCashier = false,
@@ -1027,12 +1027,12 @@ createToggle(jobsPage, "▶️ PASUL 3: Start Auto Pizza Delivery", Config.AutoD
     end
 end)
 
-createToggle(jobsPage, "Delivery Moped Turbo (95 MPH)", Config.MopedBoost, function(s)
+createToggle(jobsPage, "Delivery Moped Turbo (Safe 38 MPH)", Config.MopedBoost, function(s)
     Config.MopedBoost = s
 end)
 
-createSlider(jobsPage, "Delivery Glide Speed", 30, 150, Config.DeliverySpeed, function(val)
-    Config.DeliverySpeed = val
+createSlider(jobsPage, "Delivery Safe Speed", 16, 42, Config.DeliverySpeed, function(val)
+    Config.DeliverySpeed = math.clamp(val, 16, 38)
 end)
 
 createButton(jobsPage, "Teleport to Saved Pizza Spot", function()
@@ -1363,28 +1363,69 @@ interactWithObject = function(target)
     simulatePressE(0.25)
 end
 
--- Ultra-Fast Active Customer Finder (Recursive Scan + Arrow Proximity)
+-- Ultra-Fast Active Customer Finder (Direct Arrow Locator + GUI Indicator)
+local function findArrowInPlayerGui()
+    local pgui = LocalPlayer:FindFirstChild("PlayerGui")
+    if not pgui then return nil, nil end
+
+    for _, desc in ipairs(pgui:GetDescendants()) do
+        if desc:IsA("BillboardGui") and desc.Adornee then
+            local ad = desc.Adornee
+            local p = (ad:IsA("BasePart") and ad.Position) or (ad:IsA("Model") and ad:GetPivot().Position)
+            if p and p.Y > 5 and not ad:IsDescendantOf(LocalPlayer.Character) then
+                return p, ad
+            end
+        end
+        if desc:IsA("ObjectValue") and desc.Value then
+            local val = desc.Value
+            if (val:IsA("Model") or val:IsA("BasePart")) and not val:IsDescendantOf(LocalPlayer.Character) then
+                local vn = desc.Name:lower()
+                local valn = val.Name:lower()
+                if vn:find("target") or vn:find("customer") or vn:find("arrow") or vn:find("order") or valn:find("customer") then
+                    return val:GetPivot().Position, val
+                end
+            end
+        end
+        if desc:IsA("Vector3Value") and (desc.Name:lower():find("target") or desc.Name:lower():find("customer") or desc.Name:lower():find("dest")) then
+            if desc.Value.Y > 5 then
+                return desc.Value, nil
+            end
+        end
+    end
+    return nil, nil
+end
+
 local function getArrowPosition()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local myPos = hrp and hrp.Position or Vector3.new(0, 0, 0)
 
-    -- Check Camera for Arrow
+    -- 1. Check PlayerGui for Arrow or BillboardGui Adornee
+    local pguiPos, pguiObj = findArrowInPlayerGui()
+    if pguiPos then
+        return pguiPos, pguiObj
+    end
+
+    -- 2. Check Camera for 3D Arrow
     if Camera then
-        for _, obj in ipairs(Camera:GetChildren()) do
-            if obj.Name:lower():find("arrow") then
-                local p = obj:GetPivot().Position
-                if p.Y > 5 and (p - myPos).Magnitude > 4 then
-                    return p, obj
+        for _, obj in ipairs(Camera:GetDescendants()) do
+            local n = obj.Name:lower()
+            if n:find("arrow") or n:find("pointer") or n:find("indicator") or n:find("waypoint") or n:find("target") then
+                if obj:IsA("BasePart") or obj:IsA("Model") then
+                    local p = obj:GetPivot().Position
+                    if p.Y > 5 and (p - myPos).Magnitude > 4 then
+                        return p, obj
+                    end
                 end
             end
         end
     end
 
-    -- Check Character for Arrow
+    -- 3. Check Character for 3D Arrow
     if char then
-        for _, obj in ipairs(char:GetChildren()) do
-            if obj.Name:lower():find("arrow") then
+        for _, obj in ipairs(char:GetDescendants()) do
+            local n = obj.Name:lower()
+            if (n:find("arrow") or n:find("pointer")) and (obj:IsA("BasePart") or obj:IsA("Model")) then
                 local p = obj:GetPivot().Position
                 if p.Y > 5 and (p - myPos).Magnitude > 4 then
                     return p, obj
@@ -1393,19 +1434,20 @@ local function getArrowPosition()
         end
     end
 
-    -- Scan Workspace folders (up to depth 4, skip heavy static folders)
-    local foundPos = nil
-    local foundObj = nil
+    -- 4. Scan Workspace folders (up to depth 5, skipping heavy non-job folders)
+    local foundPos, foundObj = nil, nil
     local function searchArrow(parent, depth)
         if not parent or depth <= 0 or foundPos then return end
         for _, child in ipairs(parent:GetChildren()) do
             local cn = child.Name:lower()
-            if cn:find("arrow") or cn:find("target") or cn:find("waypoint") then
-                local p = child:GetPivot().Position
-                if p.Y > 5 and (p - myPos).Magnitude > 4 then
-                    foundPos = p
-                    foundObj = child
-                    return
+            if cn:find("arrow") or cn:find("target") or cn:find("waypoint") or cn:find("orderarrow") or cn:find("deliveryarrow") then
+                if child:IsA("BasePart") or child:IsA("Model") then
+                    local p = child:GetPivot().Position
+                    if p.Y > 5 and (p - myPos).Magnitude > 4 then
+                        foundPos = p
+                        foundObj = child
+                        return
+                    end
                 end
             elseif child:IsA("Folder") or child:IsA("Model") then
                 if not (cn:find("terrain") or cn:find("road") or cn:find("tree") or cn:find("plot") or cn:find("building")) then
@@ -1414,7 +1456,8 @@ local function getArrowPosition()
             end
         end
     end
-    searchArrow(Workspace, 4)
+    searchArrow(Workspace, 5)
+
     return foundPos, foundObj
 end
 
@@ -1434,7 +1477,7 @@ local function getAllNPCs()
             end
         end
     end
-    searchNPCs(Workspace, 4)
+    searchNPCs(Workspace, 5)
     return npcs
 end
 
@@ -1453,13 +1496,13 @@ getActiveDeliveryCustomer = function()
     end
     State.LastCustomerSearch = now
 
-    -- 1. Try finding Delivery Arrow in Workspace or Camera
+    -- 1. Try finding Delivery Arrow position
     local arrowPos, arrowObj = getArrowPosition()
 
     -- 2. Find all NPCs in Workspace
     local npcs = getAllNPCs()
 
-    -- Strategy A: Find NPC closest to arrow position
+    -- Strategy A: Find NPC closest to arrow position (MUST BE within 35 studs of arrow)
     if arrowPos then
         local closestNpc = nil
         local closestDist = math.huge
@@ -1478,7 +1521,7 @@ getActiveDeliveryCustomer = function()
             return closestNpc, prompt
         end
 
-        -- If no NPC was close to arrow, target the Arrow model itself
+        -- If no NPC was within 35 studs of arrow, the arrow itself is the delivery target!
         local arrowModel = (arrowObj:IsA("Model") and arrowObj) or (arrowObj.Parent and arrowObj.Parent:IsA("Model") and arrowObj.Parent) or arrowObj
         if arrowModel then
             State.CachedCustomer = arrowModel
@@ -1486,8 +1529,7 @@ getActiveDeliveryCustomer = function()
         end
     end
 
-    -- Strategy B: Check NPCs with Delivery/Give prompt or Billboard/Arrow indicator
-    local pizzaSpot = State.SavedPizzaSpot or hrp.Position
+    -- Strategy B: Check NPCs with explicit Delivery indicator (BillboardGui / Arrow on head / Prompt)
     for _, npc in ipairs(npcs) do
         local nPos = npc:GetPivot().Position
         if nPos.Y > 5 then
@@ -1524,17 +1566,7 @@ getActiveDeliveryCustomer = function()
         end
     end
 
-    -- Strategy C: Outside customer NPC (>70 studs away from Pizza Planet)
-    for _, npc in ipairs(npcs) do
-        local nPos = npc:GetPivot().Position
-        if nPos.Y > 5 and (nPos - pizzaSpot).Magnitude > 70 then
-            local prompt = npc:FindFirstChildWhichIsA("ProximityPrompt", true)
-            State.CachedCustomer = npc
-            State.CachedPrompt = prompt
-            return npc, prompt
-        end
-    end
-
+    -- NO RANDOM GUESSING: If neither arrow nor customer indicator is found, wait for arrow to appear!
     return nil, nil
 end
 
@@ -1657,7 +1689,7 @@ hasPizzaBox = function()
     return false, nil
 end
 
--- Smooth Glide Function with Anti-Void floor clamping
+-- Smooth Safe Glide Function (Safe Speed & Ground Elevation Following - Zero Anti-Cheat Kicks)
 smoothGlideTo = function(targetPos, speed)
     local character = LocalPlayer.Character
     if not character then return end
@@ -1681,18 +1713,22 @@ smoothGlideTo = function(targetPos, speed)
 
     if not rootPart then return end
 
-    speed = speed or (isVehicle and (Config.MopedSpeed or 95) or Config.DeliverySpeed or 65)
+    -- Safe speed clamp: Moped 36-38 max, on foot 20-24 max (Eliminates server kicks!)
+    local maxSafe = isVehicle and 38 or 24
+    speed = math.clamp(speed or (isVehicle and (Config.MopedSpeed or 38) or (Config.DeliverySpeed or 22)), 14, maxSafe)
+
     local currentPos = rootPart.Position
     local dist = (targetPos - currentPos).Magnitude
     if dist < 2.5 then return end
 
-    local duration = math.clamp(dist / speed, 0.15, 8)
+    local duration = math.clamp(dist / speed, 0.25, 12)
 
     local bodyVel = rootPart:FindFirstChild("PullZ_GlideVel")
     if not bodyVel then
         bodyVel = Instance.new("BodyVelocity")
         bodyVel.Name = "PullZ_GlideVel"
-        bodyVel.MaxForce = Vector3.new(1e7, 1e7, 1e7)
+        -- Moderate horizontal force, low vertical force to stay on ground
+        bodyVel.MaxForce = Vector3.new(4e4, 1.5e4, 4e4)
         bodyVel.Parent = rootPart
     end
 
@@ -1701,10 +1737,9 @@ smoothGlideTo = function(targetPos, speed)
         local alpha = math.clamp((tick() - startTime) / duration, 0, 1)
         local nextPos = currentPos:Lerp(targetPos, alpha)
 
-        -- Clamp minimum height to avoid getting stuck in terrain or road
-        if nextPos.Y < 8 then
-            nextPos = Vector3.new(nextPos.X, 8, nextPos.Z)
-        end
+        -- Keep height grounded (Road elevation typically between 10 and 22 in Bloxburg)
+        local groundY = math.clamp(nextPos.Y, 9, 24)
+        nextPos = Vector3.new(nextPos.X, groundY, nextPos.Z)
 
         local lookTarget = Vector3.new(targetPos.X, nextPos.Y, targetPos.Z)
         if (lookTarget - nextPos).Magnitude > 0.1 then
@@ -1783,14 +1818,14 @@ runPizzaDeliveryStep = function()
     if not hasPizza then
         -- If currently riding moped, drive to moped spot outside and dismount
         if humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
-            smoothGlideTo(mopedSpot + Vector3.new(0, 1.5, 0), Config.MopedSpeed or 95)
+            smoothGlideTo(mopedSpot + Vector3.new(0, 1.5, 0), Config.MopedSpeed or 38)
             task.wait(0.15)
             humanoid.Jump = true
             task.wait(0.25)
         end
 
         -- Walk/glide directly to saved pizza conveyor spot
-        smoothGlideTo(boxSpot + Vector3.new(0, 1.5, 0), Config.DeliverySpeed)
+        smoothGlideTo(boxSpot + Vector3.new(0, 1.5, 0), Config.DeliverySpeed or 22)
 
         -- Align rotation to face conveyor exactly as saved
         if State.SavedPizzaCFrame then
@@ -1834,8 +1869,8 @@ runPizzaDeliveryStep = function()
         -- Check if mounted on moped; if not, MOVE OUTSIDE TO MOPED SPOT FIRST!
         local isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
         if not isMounted then
-            -- Glide outside to moped spot
-            smoothGlideTo(mopedSpot + Vector3.new(0, 1.5, 0), Config.DeliverySpeed)
+            -- Glide outside to moped spot at safe speed
+            smoothGlideTo(mopedSpot + Vector3.new(0, 1.5, 0), Config.DeliverySpeed or 22)
             task.wait(0.15)
 
             -- At moped spot, mount the moped
@@ -1853,7 +1888,7 @@ runPizzaDeliveryStep = function()
         -- Re-check if mounted on moped
         isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
 
-        -- Ride directly to active customer
+        -- Ride directly to active customer (following arrow or customer indicator)
         local customer, custPrompt = getActiveDeliveryCustomer()
         if customer then
             local custHrp = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head") or customer.PrimaryPart or (customer:IsA("BasePart") and customer)
@@ -1864,7 +1899,7 @@ runPizzaDeliveryStep = function()
                     deliverPos = custPos + (custHrp.CFrame.LookVector * 3.5) + Vector3.new(0, 1.5, 0)
                 end
 
-                local speed = isMounted and (Config.MopedSpeed or 95) or Config.DeliverySpeed
+                local speed = isMounted and (Config.MopedSpeed or 38) or (Config.DeliverySpeed or 22)
                 smoothGlideTo(deliverPos, speed)
                 task.wait(0.25)
 
@@ -1881,7 +1916,8 @@ runPizzaDeliveryStep = function()
                 State.CachedCustomer = nil
             end
         else
-            task.wait(0.3)
+            -- Arrow is still updating, wait patiently at safe speed
+            task.wait(0.35)
         end
     end
 end
@@ -1896,15 +1932,15 @@ table.insert(State.Connections, task.spawn(function()
     end
 end))
 
--- Delivery Moped Turbo Boost Loop
+-- Delivery Moped Turbo Boost Loop (Safe Cap: 38 MPH)
 table.insert(State.Connections, RunService.Heartbeat:Connect(function()
     if Config.MopedBoost and LocalPlayer.Character then
         local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
         if humanoid and humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
             local seat = humanoid.SeatPart
-            seat.MaxSpeed = Config.MopedSpeed or 95
-            seat.Torque = 2.5
-            seat.TurnSpeed = 2.5
+            seat.MaxSpeed = math.clamp(Config.MopedSpeed or 38, 20, 42)
+            seat.Torque = 1.5
+            seat.TurnSpeed = 1.8
         end
     end
 end))
