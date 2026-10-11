@@ -134,7 +134,11 @@ local State = {
     SavedConveyorPos = nil,
     LastCustomerSearch = 0,
     CachedCustomer = nil,
-    CachedPrompt = nil
+    CachedPrompt = nil,
+    LearnedCustomerName = nil,
+    LearnedCustomerParent = nil,
+    LearnedMopedName = nil,
+    LearnedArrowName = nil
 }
 
 -- ScreenGui Setup (Multi-Executor Compatibility)
@@ -918,6 +922,7 @@ local settingsPage = createTab("⚙️ Settings")
 -- Forward Declarations for Delivery Engine
 local simulatePressE, triggerPrompt, triggerNearbyPrompts, interactWithObject
 local getActiveDeliveryCustomer, findNearestMoped, hasPizzaBox, smoothGlideTo, mountMoped, runPizzaDeliveryStep
+local isRealPlayer, learnDeliveryRunNow
 
 -- ==================== [CATEGORY 1: AUTO JOBS] ====================
 createHeader(jobsPage, "🍕 Pizza Delivery Automation")
@@ -1010,6 +1015,35 @@ createButton(jobsPage, "🛵 PASUL 2: Setează Poziția Moped (Lângă moped)", 
             task.delay(2, function() msg:Destroy() end)
         end)
     end
+end)
+
+-- PASUL 2.5: Învață Cursa (Apasă când ai pizza în mână sau ești lângă client)
+createButton(jobsPage, "🎯 PASUL 2.5: Învață Cursa (Apasă când ai pizza / la client)", function()
+    local ok, msg = false, "Necunoscut"
+    if learnDeliveryRunNow then
+        ok, msg = learnDeliveryRunNow()
+    end
+    if ok then
+        spotStatusLabel.Text = "🎉 " .. tostring(msg)
+        spotStatusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
+        pcall(function()
+            local m = Instance.new("Message", Workspace)
+            m.Text = "✅ " .. tostring(msg) .. "\nAcum poți porni PASUL 3: Start Auto Delivery!"
+            task.delay(3, function() m:Destroy() end)
+        end)
+    else
+        spotStatusLabel.Text = "⚠️ " .. tostring(msg)
+        spotStatusLabel.TextColor3 = Color3.fromRGB(255, 180, 80)
+    end
+end)
+
+createButton(jobsPage, "🔄 Resetează Cursa Învățată (Curăță Cache)", function()
+    State.LearnedCustomerName = nil
+    State.LearnedCustomerParent = nil
+    State.CachedCustomer = nil
+    State.CachedPrompt = nil
+    spotStatusLabel.Text = "🔄 Cache resetat! Poți învăța o nouă cursă."
+    spotStatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
 end)
 
 -- PASUL 3: Start Auto Pizza Delivery Worker
@@ -1363,6 +1397,20 @@ interactWithObject = function(target)
     simulatePressE(0.25)
 end
 
+-- Strict Check: Is this a real player character or descendant of a player?
+isRealPlayer = function(instance)
+    if not instance then return false end
+    if instance == LocalPlayer.Character then return true end
+    if Players:GetPlayerFromCharacter(instance) then return true end
+    if instance.Parent and Players:GetPlayerFromCharacter(instance.Parent) then return true end
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr.Character and (instance == plr.Character or instance:IsDescendantOf(plr.Character)) then
+            return true
+        end
+    end
+    return false
+end
+
 -- Ultra-Fast Active Customer Finder (Direct Arrow Locator + GUI Indicator)
 local function findArrowInPlayerGui()
     local pgui = LocalPlayer:FindFirstChild("PlayerGui")
@@ -1371,14 +1419,31 @@ local function findArrowInPlayerGui()
     for _, desc in ipairs(pgui:GetDescendants()) do
         if desc:IsA("BillboardGui") and desc.Adornee then
             local ad = desc.Adornee
-            local p = (ad:IsA("BasePart") and ad.Position) or (ad:IsA("Model") and ad:GetPivot().Position)
-            if p and p.Y > 5 and not ad:IsDescendantOf(LocalPlayer.Character) then
-                return p, ad
+            -- NEVER match real players!
+            if not isRealPlayer(ad) then
+                local dn = desc.Name:lower()
+                local isArrow = dn:find("arrow") or dn:find("marker") or dn:find("target") or dn:find("delivery") or dn:find("order") or dn:find("waypoint") or dn:find("pointer")
+                if not isArrow then
+                    for _, c in ipairs(desc:GetChildren()) do
+                        local cn = c.Name:lower()
+                        if cn:find("arrow") or cn:find("pointer") or cn:find("marker") or cn:find("waypoint") then
+                            isArrow = true
+                            break
+                        end
+                    end
+                end
+                if isArrow then
+                    local p = (ad:IsA("BasePart") and ad.Position) or (ad:IsA("Model") and ad:GetPivot().Position)
+                    if p and p.Y > 5 then
+                        return p, ad
+                    end
+                end
             end
         end
+
         if desc:IsA("ObjectValue") and desc.Value then
             local val = desc.Value
-            if (val:IsA("Model") or val:IsA("BasePart")) and not val:IsDescendantOf(LocalPlayer.Character) then
+            if (val:IsA("Model") or val:IsA("BasePart")) and not isRealPlayer(val) then
                 local vn = desc.Name:lower()
                 local valn = val.Name:lower()
                 if vn:find("target") or vn:find("customer") or vn:find("arrow") or vn:find("order") or valn:find("customer") then
@@ -1386,6 +1451,7 @@ local function findArrowInPlayerGui()
                 end
             end
         end
+
         if desc:IsA("Vector3Value") and (desc.Name:lower():find("target") or desc.Name:lower():find("customer") or desc.Name:lower():find("dest")) then
             if desc.Value.Y > 5 then
                 return desc.Value, nil
@@ -1402,7 +1468,7 @@ local function getArrowPosition()
 
     -- 1. Check PlayerGui for Arrow or BillboardGui Adornee
     local pguiPos, pguiObj = findArrowInPlayerGui()
-    if pguiPos then
+    if pguiPos and not isRealPlayer(pguiObj) then
         return pguiPos, pguiObj
     end
 
@@ -1411,7 +1477,7 @@ local function getArrowPosition()
         for _, obj in ipairs(Camera:GetDescendants()) do
             local n = obj.Name:lower()
             if n:find("arrow") or n:find("pointer") or n:find("indicator") or n:find("waypoint") or n:find("target") then
-                if obj:IsA("BasePart") or obj:IsA("Model") then
+                if (obj:IsA("BasePart") or obj:IsA("Model")) and not isRealPlayer(obj) then
                     local p = obj:GetPivot().Position
                     if p.Y > 5 and (p - myPos).Magnitude > 4 then
                         return p, obj
@@ -1439,19 +1505,21 @@ local function getArrowPosition()
     local function searchArrow(parent, depth)
         if not parent or depth <= 0 or foundPos then return end
         for _, child in ipairs(parent:GetChildren()) do
-            local cn = child.Name:lower()
-            if cn:find("arrow") or cn:find("target") or cn:find("waypoint") or cn:find("orderarrow") or cn:find("deliveryarrow") then
-                if child:IsA("BasePart") or child:IsA("Model") then
-                    local p = child:GetPivot().Position
-                    if p.Y > 5 and (p - myPos).Magnitude > 4 then
-                        foundPos = p
-                        foundObj = child
-                        return
+            if not isRealPlayer(child) then
+                local cn = child.Name:lower()
+                if cn:find("arrow") or cn:find("target") or cn:find("waypoint") or cn:find("orderarrow") or cn:find("deliveryarrow") then
+                    if child:IsA("BasePart") or child:IsA("Model") then
+                        local p = child:GetPivot().Position
+                        if p.Y > 5 and (p - myPos).Magnitude > 4 then
+                            foundPos = p
+                            foundObj = child
+                            return
+                        end
                     end
-                end
-            elseif child:IsA("Folder") or child:IsA("Model") then
-                if not (cn:find("terrain") or cn:find("road") or cn:find("tree") or cn:find("plot") or cn:find("building")) then
-                    searchArrow(child, depth - 1)
+                elseif child:IsA("Folder") or child:IsA("Model") then
+                    if not (cn:find("terrain") or cn:find("road") or cn:find("tree") or cn:find("plot") or cn:find("building")) then
+                        searchArrow(child, depth - 1)
+                    end
                 end
             end
         end
@@ -1468,11 +1536,15 @@ local function getAllNPCs()
         if not parent or depth <= 0 then return end
         for _, child in ipairs(parent:GetChildren()) do
             if child:IsA("Model") and child ~= char and child:FindFirstChildOfClass("Humanoid") then
-                table.insert(npcs, child)
+                if not isRealPlayer(child) then
+                    table.insert(npcs, child)
+                end
             elseif child:IsA("Folder") or child:IsA("Model") then
-                local cn = child.Name:lower()
-                if not (cn:find("terrain") or cn:find("road") or cn:find("tree") or cn:find("plot") or cn:find("house") or cn:find("building")) then
-                    searchNPCs(child, depth - 1)
+                if not isRealPlayer(child) then
+                    local cn = child.Name:lower()
+                    if not (cn:find("terrain") or cn:find("road") or cn:find("tree") or cn:find("plot") or cn:find("house") or cn:find("building")) then
+                        searchNPCs(child, depth - 1)
+                    end
                 end
             end
         end
@@ -1488,7 +1560,7 @@ getActiveDeliveryCustomer = function()
     if not hrp then return nil, nil end
 
     local now = tick()
-    if State.CachedCustomer and State.CachedCustomer.Parent and (now - (State.LastCustomerSearch or 0) < 1.0) then
+    if State.CachedCustomer and State.CachedCustomer.Parent and not isRealPlayer(State.CachedCustomer) and (now - (State.LastCustomerSearch or 0) < 1.0) then
         local cHead = State.CachedCustomer:FindFirstChild("Head") or State.CachedCustomer:FindFirstChild("HumanoidRootPart") or (State.CachedCustomer:IsA("BasePart") and State.CachedCustomer)
         if cHead and cHead.Position.Y > 5 then
             return State.CachedCustomer, State.CachedPrompt
@@ -1498,20 +1570,69 @@ getActiveDeliveryCustomer = function()
 
     -- 1. Try finding Delivery Arrow position
     local arrowPos, arrowObj = getArrowPosition()
+    if arrowObj and isRealPlayer(arrowObj) then
+        arrowPos, arrowObj = nil, nil
+    end
 
-    -- 2. Find all NPCs in Workspace
+    -- 2. Find all NPCs in Workspace (Strictly excluding real players)
     local npcs = getAllNPCs()
 
-    -- Strategy A: Find NPC closest to arrow position (MUST BE within 35 studs of arrow)
+    -- Strategy 0: If customer was learned previously, prioritize matching it!
+    if State.LearnedCustomerName then
+        local candidates = {}
+        if State.LearnedCustomerParent and State.LearnedCustomerParent.Parent then
+            for _, child in ipairs(State.LearnedCustomerParent:GetChildren()) do
+                if child.Name == State.LearnedCustomerName and child:IsA("Model") and not isRealPlayer(child) then
+                    table.insert(candidates, child)
+                end
+            end
+        end
+        if #candidates == 0 then
+            for _, npc in ipairs(npcs) do
+                if npc.Name == State.LearnedCustomerName and not isRealPlayer(npc) then
+                    table.insert(candidates, npc)
+                end
+            end
+        end
+
+        if #candidates > 0 then
+            if arrowPos then
+                local bestCust, bestDist = nil, math.huge
+                for _, c in ipairs(candidates) do
+                    local d = (c:GetPivot().Position - arrowPos).Magnitude
+                    if d < bestDist then
+                        bestDist = d
+                        bestCust = c
+                    end
+                end
+                if bestCust and bestDist < 50 then
+                    local prompt = bestCust:FindFirstChildWhichIsA("ProximityPrompt", true)
+                    State.CachedCustomer = bestCust
+                    State.CachedPrompt = prompt
+                    return bestCust, prompt
+                end
+            elseif #candidates == 1 then
+                local c = candidates[1]
+                local prompt = c:FindFirstChildWhichIsA("ProximityPrompt", true)
+                State.CachedCustomer = c
+                State.CachedPrompt = prompt
+                return c, prompt
+            end
+        end
+    end
+
+    -- Strategy A: Find NPC closest to arrow position (MUST BE within 35 studs of arrow, not a player)
     if arrowPos then
         local closestNpc = nil
         local closestDist = math.huge
         for _, npc in ipairs(npcs) do
-            local nPos = npc:GetPivot().Position
-            local d = (Vector3.new(nPos.X, 0, nPos.Z) - Vector3.new(arrowPos.X, 0, arrowPos.Z)).Magnitude
-            if d < 35 and d < closestDist then
-                closestDist = d
-                closestNpc = npc
+            if not isRealPlayer(npc) then
+                local nPos = npc:GetPivot().Position
+                local d = (Vector3.new(nPos.X, 0, nPos.Z) - Vector3.new(arrowPos.X, 0, arrowPos.Z)).Magnitude
+                if d < 35 and d < closestDist then
+                    closestDist = d
+                    closestNpc = npc
+                end
             end
         end
         if closestNpc then
@@ -1521,53 +1642,130 @@ getActiveDeliveryCustomer = function()
             return closestNpc, prompt
         end
 
-        -- If no NPC was within 35 studs of arrow, the arrow itself is the delivery target!
-        local arrowModel = (arrowObj:IsA("Model") and arrowObj) or (arrowObj.Parent and arrowObj.Parent:IsA("Model") and arrowObj.Parent) or arrowObj
-        if arrowModel then
-            State.CachedCustomer = arrowModel
-            return arrowModel, nil
+        -- If no NPC was within 35 studs of arrow, the arrow itself is the delivery target (if not a player)
+        if arrowObj and not isRealPlayer(arrowObj) then
+            local arrowModel = (arrowObj:IsA("Model") and arrowObj) or (arrowObj.Parent and arrowObj.Parent:IsA("Model") and arrowObj.Parent) or arrowObj
+            if arrowModel and not isRealPlayer(arrowModel) then
+                State.CachedCustomer = arrowModel
+                return arrowModel, nil
+            end
         end
     end
 
     -- Strategy B: Check NPCs with explicit Delivery indicator (BillboardGui / Arrow on head / Prompt)
     for _, npc in ipairs(npcs) do
-        local nPos = npc:GetPivot().Position
-        if nPos.Y > 5 then
-            local head = npc:FindFirstChild("Head")
-            local hasIndicator = false
-            if head and (head:FindFirstChildOfClass("BillboardGui") or head:FindFirstChild("Arrow")) then
-                hasIndicator = true
-            end
-            for _, c in ipairs(npc:GetChildren()) do
-                local cn = c.Name:lower()
-                if cn:find("arrow") or cn:find("order") or cn:find("delivery") or c:IsA("BillboardGui") then
+        if not isRealPlayer(npc) then
+            local nPos = npc:GetPivot().Position
+            if nPos.Y > 5 then
+                local head = npc:FindFirstChild("Head")
+                local hasIndicator = false
+                if head and (head:FindFirstChildOfClass("BillboardGui") or head:FindFirstChild("Arrow")) then
                     hasIndicator = true
-                    break
                 end
-            end
+                for _, c in ipairs(npc:GetChildren()) do
+                    local cn = c.Name:lower()
+                    if cn:find("arrow") or cn:find("order") or cn:find("delivery") or c:IsA("BillboardGui") then
+                        hasIndicator = true
+                        break
+                    end
+                end
 
-            local prompt = npc:FindFirstChildWhichIsA("ProximityPrompt", true)
-            if prompt then
-                local act = prompt.ActionText:lower()
-                local objt = prompt.ObjectText:lower()
-                if act:find("give") or act:find("deliver") or act:find("hand") or act:find("pizza") or
-                   objt:find("customer") or objt:find("pizza") or objt:find("order") then
+                local prompt = npc:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if prompt then
+                    local act = prompt.ActionText:lower()
+                    local objt = prompt.ObjectText:lower()
+                    if act:find("give") or act:find("deliver") or act:find("hand") or act:find("pizza") or
+                       objt:find("customer") or objt:find("pizza") or objt:find("order") then
+                        State.CachedCustomer = npc
+                        State.CachedPrompt = prompt
+                        return npc, prompt
+                    end
+                end
+
+                if hasIndicator then
                     State.CachedCustomer = npc
                     State.CachedPrompt = prompt
                     return npc, prompt
                 end
-            end
-
-            if hasIndicator then
-                State.CachedCustomer = npc
-                State.CachedPrompt = prompt
-                return npc, prompt
             end
         end
     end
 
     -- NO RANDOM GUESSING: If neither arrow nor customer indicator is found, wait for arrow to appear!
     return nil, nil
+end
+
+-- Learning Engine: Learns customer model, moped, and delivery target during manual or guided run
+learnDeliveryRunNow = function()
+    local char = LocalPlayer.Character
+    if not char then return false, "Caracterul nu a fost găsit" end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp then return false, "HumanoidRootPart nu a fost găsit" end
+
+    -- 1. Check if seated on Moped
+    if hum and hum.SeatPart and hum.SeatPart:IsA("VehicleSeat") then
+        State.SavedMopedSeat = hum.SeatPart
+        State.SavedMopedSpot = hrp.Position
+        State.LearnedMopedName = hum.SeatPart.Parent and hum.SeatPart.Parent.Name or hum.SeatPart.Name
+    end
+
+    -- 2. Check Delivery Arrow
+    local arrowPos, arrowObj = getArrowPosition()
+    if arrowObj and not isRealPlayer(arrowObj) then
+        State.LearnedArrowName = arrowObj.Name
+    end
+
+    -- 3. Check nearest NPC within 40 studs (MUST NOT BE A REAL PLAYER)
+    local npcs = getAllNPCs()
+    local closestNpc, closestDist = nil, 40
+    for _, npc in ipairs(npcs) do
+        if not isRealPlayer(npc) then
+            local nPos = npc:GetPivot().Position
+            local d = (nPos - hrp.Position).Magnitude
+            if d < closestDist then
+                closestDist = d
+                closestNpc = npc
+            end
+        end
+    end
+
+    -- If no NPC near player, but an arrow exists, check NPC near arrow
+    if not closestNpc and arrowPos then
+        for _, npc in ipairs(npcs) do
+            if not isRealPlayer(npc) then
+                local d = (npc:GetPivot().Position - arrowPos).Magnitude
+                if d < 35 then
+                    closestNpc = npc
+                    break
+                end
+            end
+        end
+    end
+
+    if closestNpc then
+        State.LearnedCustomerName = closestNpc.Name
+        State.LearnedCustomerParent = closestNpc.Parent
+        local prompt = closestNpc:FindFirstChildWhichIsA("ProximityPrompt", true)
+        State.CachedCustomer = closestNpc
+        State.CachedPrompt = prompt
+
+        -- If standing right at the customer, auto-deliver right now!
+        if closestDist < 18 then
+            simulatePressE(0.4)
+            if prompt then triggerPrompt(prompt) end
+            triggerNearbyPrompts(closestNpc:GetPivot().Position, 10)
+            State.HasPizza = false
+        end
+
+        local pName = closestNpc.Parent and closestNpc.Parent.Name or "Workspace"
+        return true, string.format("Client Salvat: '%s' în [%s]", closestNpc.Name, pName)
+    elseif arrowPos then
+        local dist = math.floor((arrowPos - hrp.Position).Magnitude)
+        return true, string.format("Săgeată Salvată la %d studs distanță!", dist)
+    else
+        return false, "Niciun client/săgeată în 40 studs. Mergi la client și apasă din nou!"
+    end
 end
 
 -- Fast Nearest Moped Locator
