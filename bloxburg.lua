@@ -138,7 +138,12 @@ local State = {
     LearnedCustomerName = nil,
     LearnedCustomerParent = nil,
     LearnedMopedName = nil,
-    LearnedArrowName = nil
+    LearnedArrowName = nil,
+    CachedNPCs = nil,
+    LastNPCSearch = 0,
+    CachedArrowPos = nil,
+    CachedArrowObj = nil,
+    LastArrowSearch = 0
 }
 
 -- ScreenGui Setup (Multi-Executor Compatibility)
@@ -922,7 +927,7 @@ local settingsPage = createTab("⚙️ Settings")
 -- Forward Declarations for Delivery Engine
 local simulatePressE, triggerPrompt, triggerNearbyPrompts, interactWithObject
 local getActiveDeliveryCustomer, findNearestMoped, hasPizzaBox, smoothGlideTo, mountMoped, runPizzaDeliveryStep
-local isRealPlayer, learnDeliveryRunNow
+local isRealPlayer, learnDeliveryRunNow, debugLog
 
 -- ==================== [CATEGORY 1: AUTO JOBS] ====================
 createHeader(jobsPage, "🍕 Pizza Delivery Automation")
@@ -948,6 +953,32 @@ spotStatusLabel.Font = Enum.Font.GothamMedium
 spotStatusLabel.TextSize = 11
 spotStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 spotStatusLabel.Parent = statusCard
+
+-- Live Debug Logger (Outputs to F9 Console + In-Game Status UI)
+debugLog = function(tag, message, color)
+    local timeStr = os.date("%H:%M:%S")
+    local line = string.format("[PullZ Bloxburg][%s][%s] %s", timeStr, tag, message)
+    print(line)
+    if spotStatusLabel then
+        pcall(function()
+            spotStatusLabel.Text = string.format("[%s] %s", tag, message)
+            if color then
+                spotStatusLabel.TextColor3 = color
+            else
+                spotStatusLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+            end
+        end)
+    end
+end
+
+-- Button: Open Developer Console (F9)
+createButton(jobsPage, "📜 Deschide Consola F9 (Live Debugger)", function()
+    pcall(function()
+        local StarterGui = game:GetService("StarterGui")
+        StarterGui:SetCore("DevConsoleVisible", true)
+    end)
+    debugLog("DEBUGGER", "Consola F9 deschisă! Urmărește aici fiecare pas în timp real. 🚀", Color3.fromRGB(100, 255, 150))
+end)
 
 -- PASUL 1: Setează Poziția Cutii Pizza
 createButton(jobsPage, "📍 PASUL 1: Setează Poziția Cutii Pizza (Unde ești acum)", function()
@@ -1462,6 +1493,12 @@ local function findArrowInPlayerGui()
 end
 
 local function getArrowPosition()
+    local now = tick()
+    if State.CachedArrowPos and (now - (State.LastArrowSearch or 0) < 0.6) then
+        return State.CachedArrowPos, State.CachedArrowObj
+    end
+    State.LastArrowSearch = now
+
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local myPos = hrp and hrp.Position or Vector3.new(0, 0, 0)
@@ -1469,6 +1506,8 @@ local function getArrowPosition()
     -- 1. Check PlayerGui for Arrow or BillboardGui Adornee
     local pguiPos, pguiObj = findArrowInPlayerGui()
     if pguiPos and not isRealPlayer(pguiObj) then
+        State.CachedArrowPos = pguiPos
+        State.CachedArrowObj = pguiObj
         return pguiPos, pguiObj
     end
 
@@ -1480,6 +1519,8 @@ local function getArrowPosition()
                 if (obj:IsA("BasePart") or obj:IsA("Model")) and not isRealPlayer(obj) then
                     local p = obj:GetPivot().Position
                     if p.Y > 5 and (p - myPos).Magnitude > 4 then
+                        State.CachedArrowPos = p
+                        State.CachedArrowObj = obj
                         return p, obj
                     end
                 end
@@ -1494,13 +1535,15 @@ local function getArrowPosition()
             if (n:find("arrow") or n:find("pointer")) and (obj:IsA("BasePart") or obj:IsA("Model")) then
                 local p = obj:GetPivot().Position
                 if p.Y > 5 and (p - myPos).Magnitude > 4 then
+                    State.CachedArrowPos = p
+                    State.CachedArrowObj = obj
                     return p, obj
                 end
             end
         end
     end
 
-    -- 4. Scan Workspace folders (up to depth 5, skipping heavy non-job folders)
+    -- 4. Fast scan Workspace folders (depth 3, skipping heavy non-job folders)
     local foundPos, foundObj = nil, nil
     local function searchArrow(parent, depth)
         if not parent or depth <= 0 or foundPos then return end
@@ -1517,19 +1560,30 @@ local function getArrowPosition()
                         end
                     end
                 elseif child:IsA("Folder") or child:IsA("Model") then
-                    if not (cn:find("terrain") or cn:find("road") or cn:find("tree") or cn:find("plot") or cn:find("building")) then
+                    if not (cn:find("terrain") or cn:find("road") or cn:find("tree") or cn:find("plot") or cn:find("house") or cn:find("building") or cn:find("prop")) then
                         searchArrow(child, depth - 1)
                     end
                 end
             end
         end
     end
-    searchArrow(Workspace, 5)
+    searchArrow(Workspace, 3)
+
+    if foundPos then
+        State.CachedArrowPos = foundPos
+        State.CachedArrowObj = foundObj
+    end
 
     return foundPos, foundObj
 end
 
 local function getAllNPCs()
+    local now = tick()
+    if State.CachedNPCs and (now - (State.LastNPCSearch or 0) < 2.5) then
+        return State.CachedNPCs
+    end
+    State.LastNPCSearch = now
+
     local char = LocalPlayer.Character
     local npcs = {}
     local function searchNPCs(parent, depth)
@@ -1542,14 +1596,15 @@ local function getAllNPCs()
             elseif child:IsA("Folder") or child:IsA("Model") then
                 if not isRealPlayer(child) then
                     local cn = child.Name:lower()
-                    if not (cn:find("terrain") or cn:find("road") or cn:find("tree") or cn:find("plot") or cn:find("house") or cn:find("building")) then
+                    if not (cn:find("terrain") or cn:find("road") or cn:find("tree") or cn:find("plot") or cn:find("house") or cn:find("building") or cn:find("prop") or cn:find("furniture") or cn:find("decor")) then
                         searchNPCs(child, depth - 1)
                     end
                 end
             end
         end
     end
-    searchNPCs(Workspace, 5)
+    searchNPCs(Workspace, 3)
+    State.CachedNPCs = npcs
     return npcs
 end
 
@@ -1887,29 +1942,27 @@ hasPizzaBox = function()
     return false, nil
 end
 
--- Smooth Safe Glide Function (Safe Speed & Ground Elevation Following - Zero Anti-Cheat Kicks)
+-- Smooth Safe Glide Function (Smooth Kinematic Glide - Zero Physics Conflict, Zero Lag, Zero Kicks)
 smoothGlideTo = function(targetPos, speed)
     local character = LocalPlayer.Character
     if not character then return end
     local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local rootPart = nil
-    local isVehicle = false
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
 
     -- Anti-Void Safety: Target height must be valid
-    if targetPos.Y < 5 then
-        return
-    end
+    if targetPos.Y < 5 then return end
 
-    if humanoid and humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
-        local seat = humanoid.SeatPart
-        local mopedModel = seat:FindFirstAncestorOfClass("Model")
-        rootPart = (mopedModel and mopedModel.PrimaryPart) or seat
+    local isVehicle = false
+    local seat = humanoid and humanoid.SeatPart
+    local mopedModel = nil
+    local rootPart = hrp
+
+    if seat and seat:IsA("VehicleSeat") then
         isVehicle = true
-    else
-        rootPart = character:FindFirstChild("HumanoidRootPart")
+        mopedModel = seat:FindFirstAncestorOfClass("Model")
+        rootPart = seat
     end
-
-    if not rootPart then return end
 
     -- Safe speed clamp: Moped 36-38 max, on foot 20-24 max (Eliminates server kicks!)
     local maxSafe = isVehicle and 38 or 24
@@ -1921,13 +1974,17 @@ smoothGlideTo = function(targetPos, speed)
 
     local duration = math.clamp(dist / speed, 0.25, 12)
 
-    local bodyVel = rootPart:FindFirstChild("PullZ_GlideVel")
-    if not bodyVel then
-        bodyVel = Instance.new("BodyVelocity")
-        bodyVel.Name = "PullZ_GlideVel"
-        -- Moderate horizontal force, low vertical force to stay on ground
-        bodyVel.MaxForce = Vector3.new(4e4, 1.5e4, 4e4)
-        bodyVel.Parent = rootPart
+    -- Temporary No-Collision on vehicle parts during glide to prevent physics solver lag/explosions
+    local noclipParts = {}
+    if isVehicle and mopedModel then
+        pcall(function()
+            for _, p in ipairs(mopedModel:GetDescendants()) do
+                if p:IsA("BasePart") and p.CanCollide then
+                    p.CanCollide = false
+                    table.insert(noclipParts, p)
+                end
+            end
+        end)
     end
 
     local startTime = tick()
@@ -1935,26 +1992,53 @@ smoothGlideTo = function(targetPos, speed)
         local alpha = math.clamp((tick() - startTime) / duration, 0, 1)
         local nextPos = currentPos:Lerp(targetPos, alpha)
 
-        -- Keep height grounded (Road elevation typically between 10 and 22 in Bloxburg)
-        local groundY = math.clamp(nextPos.Y, 9, 24)
-        nextPos = Vector3.new(nextPos.X, groundY, nextPos.Z)
-
         local lookTarget = Vector3.new(targetPos.X, nextPos.Y, targetPos.Z)
+        local targetCFrame
         if (lookTarget - nextPos).Magnitude > 0.1 then
-            rootPart.CFrame = CFrame.new(nextPos, lookTarget)
+            targetCFrame = CFrame.new(nextPos, lookTarget)
         else
-            rootPart.CFrame = CFrame.new(nextPos)
+            targetCFrame = CFrame.new(nextPos)
         end
 
-        local dir = (targetPos - rootPart.Position)
-        if dir.Magnitude > 0 then
-            bodyVel.Velocity = dir.Unit * speed
+        if isVehicle then
+            -- Zero out assembly velocity to eliminate physics oscillation
+            if seat.AssemblyLinearVelocity then seat.AssemblyLinearVelocity = Vector3.zero end
+            if seat.AssemblyAngularVelocity then seat.AssemblyAngularVelocity = Vector3.zero end
+
+            if mopedModel and mopedModel.PrimaryPart then
+                mopedModel:PivotTo(targetCFrame)
+            else
+                seat.CFrame = targetCFrame
+            end
+        else
+            if hrp.AssemblyLinearVelocity then hrp.AssemblyLinearVelocity = Vector3.zero end
+            hrp.CFrame = targetCFrame
         end
+
         RunService.Heartbeat:Wait()
     end
 
-    if bodyVel then pcall(function() bodyVel:Destroy() end) end
-    rootPart.CFrame = CFrame.new(targetPos)
+    -- Restore collisions on vehicle parts
+    if #noclipParts > 0 then
+        pcall(function()
+            for _, p in ipairs(noclipParts) do
+                if p and p.Parent then
+                    p.CanCollide = true
+                end
+            end
+        end)
+    end
+
+    -- Final snap to target
+    if isVehicle then
+        if mopedModel and mopedModel.PrimaryPart then
+            mopedModel:PivotTo(CFrame.new(targetPos))
+        else
+            seat.CFrame = CFrame.new(targetPos)
+        end
+    else
+        hrp.CFrame = CFrame.new(targetPos)
+    end
 end
 
 -- Mount Moped Helper
@@ -1969,11 +2053,12 @@ mountMoped = function(mopedSeat)
         return true
     end
 
-    -- Walk/glide to moped seat
+    debugLog("MOPED", "Merg lângă scaunul mopedului...")
     smoothGlideTo(mopedSeat.Position + Vector3.new(0, 2, 0), Config.DeliverySpeed)
     task.wait(0.1)
 
     -- Sit on seat
+    debugLog("MOPED", "Urc pe moped (Seat:Sit)...")
     hrp.CFrame = mopedSeat.CFrame + Vector3.new(0, 0.5, 0)
     pcall(function()
         mopedSeat:Sit(humanoid)
@@ -1996,7 +2081,14 @@ mountMoped = function(mopedSeat)
         task.wait(0.15)
     end
 
-    return humanoid.SeatPart ~= nil
+    local seated = humanoid.SeatPart ~= nil
+    if seated then
+        debugLog("MOPED", "Urcat pe moped cu succes! ✅", Color3.fromRGB(100, 255, 150))
+    else
+        debugLog("MOPED", "⚠️ Nu s-a putut urca pe moped, reîncerc...", Color3.fromRGB(255, 180, 80))
+    end
+
+    return seated
 end
 
 -- Core Pizza Delivery Automation Step
@@ -2008,14 +2100,18 @@ runPizzaDeliveryStep = function()
     if not humanoid or not hrp or humanoid.Health <= 0 then return end
 
     local hasPizza, pizzaTool = hasPizzaBox()
+    local isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
 
     local boxSpot = State.SavedPizzaSpot or State.SavedConveyorPos or hrp.Position
     local mopedSpot = State.SavedMopedSpot or (boxSpot + Vector3.new(-30, 0, 15))
 
     -- STAGE 1: We do NOT have pizza -> Go to saved pizza spot, press E to take pizza box
     if not hasPizza then
+        debugLog("PASUL 1", "Nu ai pizza! Merg la banda de pizza...", Color3.fromRGB(255, 180, 80))
+
         -- If currently riding moped, drive to moped spot outside and dismount
-        if humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
+        if isMounted then
+            debugLog("MOPED", "Cobor de pe moped pentru a merge la cutii...")
             smoothGlideTo(mopedSpot + Vector3.new(0, 1.5, 0), Config.MopedSpeed or 38)
             task.wait(0.15)
             humanoid.Jump = true
@@ -2032,6 +2128,7 @@ runPizzaDeliveryStep = function()
         task.wait(0.1)
 
         -- PRESS [E] TO TAKE PIZZA BOX (Simulate keypress E)
+        debugLog("PASUL 1", "Apăs [E] la banda de pizza...")
         simulatePressE(0.35)
 
         if State.SavedPizzaPrompt and State.SavedPizzaPrompt.Parent then
@@ -2048,16 +2145,21 @@ runPizzaDeliveryStep = function()
 
         task.wait(0.2)
         simulatePressE(0.2)
-
         task.wait(0.3)
+
         if hasPizzaBox() then
             State.HasPizza = true
+            debugLog("PASUL 1", "Cutie de pizza luată cu succes! ✅", Color3.fromRGB(100, 255, 150))
+        else
+            debugLog("PASUL 1", "Aștept cutia să apară pe bandă...", Color3.fromRGB(255, 200, 100))
         end
 
         task.wait(Config.WorkDelay or 0.3)
 
     -- STAGE 2: We HAVE pizza -> Go out to moped, mount, and ride to customer!
     else
+        debugLog("PASUL 2", "Ai pizza! Mă pregătesc de plecare la client...", Color3.fromRGB(100, 200, 255))
+
         -- Equip pizza if in backpack
         if pizzaTool and pizzaTool.Parent == LocalPlayer:FindFirstChild("Backpack") then
             humanoid:EquipTool(pizzaTool)
@@ -2065,28 +2167,30 @@ runPizzaDeliveryStep = function()
         end
 
         -- Check if mounted on moped; if not, MOVE OUTSIDE TO MOPED SPOT FIRST!
-        local isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
+        isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
         if not isMounted then
-            -- Glide outside to moped spot at safe speed
+            debugLog("MOPED", "Merg afară spre moped...")
             smoothGlideTo(mopedSpot + Vector3.new(0, 1.5, 0), Config.DeliverySpeed or 22)
             task.wait(0.15)
 
-            -- At moped spot, mount the moped
+            debugLog("MOPED", "Urc pe moped...")
             local mopedSeat = findNearestMoped()
             if mopedSeat then
                 mountMoped(mopedSeat)
                 task.wait(0.25)
             else
-                -- Try pressing E right here outside next to the moped
                 simulatePressE(0.35)
                 task.wait(0.2)
             end
         end
 
-        -- Re-check if mounted on moped
         isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
+        if isMounted then
+            debugLog("MOPED", "Urcat pe moped cu succes! ✅", Color3.fromRGB(100, 255, 150))
+        end
 
-        -- Ride directly to active customer (following arrow or customer indicator)
+        -- Find active delivery customer
+        debugLog("CLIENT", "Caut clientul / săgeata de livrare...")
         local customer, custPrompt = getActiveDeliveryCustomer()
         if customer then
             local custHrp = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head") or customer.PrimaryPart or (customer:IsA("BasePart") and customer)
@@ -2097,11 +2201,15 @@ runPizzaDeliveryStep = function()
                     deliverPos = custPos + (custHrp.CFrame.LookVector * 3.5) + Vector3.new(0, 1.5, 0)
                 end
 
+                local distToCust = (custPos - hrp.Position).Magnitude
                 local speed = isMounted and (Config.MopedSpeed or 38) or (Config.DeliverySpeed or 22)
+                debugLog("NAVIGARE", string.format("Glisez spre client '%s' la %d MPH (Distanță: %d studs)...", customer.Name, speed, math.floor(distToCust)), Color3.fromRGB(100, 200, 255))
+
                 smoothGlideTo(deliverPos, speed)
                 task.wait(0.25)
 
                 -- Press [E] to deliver pizza to customer!
+                debugLog("LIVRARE", "Am ajuns la client! Apăs [E] pentru predare...", Color3.fromRGB(255, 200, 100))
                 simulatePressE(0.4)
                 if custPrompt then
                     triggerPrompt(custPrompt)
@@ -2112,20 +2220,27 @@ runPizzaDeliveryStep = function()
                 task.wait(Config.WorkDelay or 0.5)
                 State.HasPizza = false
                 State.CachedCustomer = nil
+                debugLog("LIVRARE", "🎉 Pizza livrată cu succes! Încep următoarea cursă! 🚀", Color3.fromRGB(100, 255, 150))
             end
         else
-            -- Arrow is still updating, wait patiently at safe speed
-            task.wait(0.35)
+            debugLog("AȘTEPTARE", "⚠️ Săgeata sau clientul nu a apărut încă. Aștept 0.5s...", Color3.fromRGB(255, 180, 80))
+            task.wait(0.5)
         end
     end
 end
 
--- Pizza Delivery Background Worker Loop
+-- Pizza Delivery Background Worker Loop (Protected with Re-entrancy Guard & Error Logging)
+local isRunningDeliveryStep = false
 table.insert(State.Connections, task.spawn(function()
     while true do
         task.wait(0.3)
-        if Config.AutoDelivery and getgenv().PullZBloxburgLoaded then
-            pcall(runPizzaDeliveryStep)
+        if Config.AutoDelivery and getgenv().PullZBloxburgLoaded and not isRunningDeliveryStep then
+            isRunningDeliveryStep = true
+            local ok, err = pcall(runPizzaDeliveryStep)
+            if not ok then
+                debugLog("EROARE", tostring(err), Color3.fromRGB(255, 80, 80))
+            end
+            isRunningDeliveryStep = false
         end
     end
 end))
