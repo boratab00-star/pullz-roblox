@@ -72,6 +72,9 @@ pcall(function() Mouse = LocalPlayer:GetMouse() end)
 local Config = {
     -- Auto Jobs & Work
     AutoDelivery = false,
+    DeliverySpeed = 65,
+    MopedBoost = true,
+    MopedSpeed = 95,
     AutoBaker = false,
     AutoHairdresser = false,
     AutoCashier = false,
@@ -301,6 +304,13 @@ task.spawn(function()
     task.wait(0.4)
     spinnerActive = false
     pcall(function() LoadingFrame:Destroy() end)
+
+    if BorderFrame and BorderFrame.Parent then
+        BorderFrame.Visible = true
+    end
+    if Watermark and Watermark.Parent and Config.WatermarkEnabled then
+        Watermark.Visible = true
+    end
 end)
 
 -- =========================================================================
@@ -312,7 +322,7 @@ Watermark.Size = UDim2.new(0, 240, 0, 30)
 Watermark.Position = UDim2.new(0, 14, 0, 14)
 Watermark.BackgroundColor3 = Color3.fromRGB(12, 12, 15)
 Watermark.BorderSizePixel = 0
-Watermark.Visible = Config.WatermarkEnabled
+Watermark.Visible = false -- Kept hidden until loading screen completes
 Watermark.Parent = ScreenGui
 
 local WatermarkCorner = Instance.new("UICorner")
@@ -362,6 +372,7 @@ BorderFrame.Size = UDim2.new(0, 684, 0, 484)
 BorderFrame.Position = UDim2.new(0.5, -342, 0.5, -242)
 BorderFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 BorderFrame.BorderSizePixel = 0
+BorderFrame.Visible = false -- Kept hidden until loading screen completes
 BorderFrame.Active = true
 BorderFrame.Draggable = true
 BorderFrame.Parent = ScreenGui
@@ -887,11 +898,52 @@ local visualsPage = createTab("👁️ Visuals")
 local settingsPage = createTab("⚙️ Settings")
 
 -- ==================== [CATEGORY 1: AUTO JOBS] ====================
-createHeader(jobsPage, "Delivery & Work Automation")
+createHeader(jobsPage, "Pizza Delivery Automation")
 
 createToggle(jobsPage, "Auto Pizza Delivery Worker", Config.AutoDelivery, function(s)
     Config.AutoDelivery = s
 end)
+
+createToggle(jobsPage, "Delivery Moped Turbo (95 MPH)", Config.MopedBoost, function(s)
+    Config.MopedBoost = s
+end)
+
+createSlider(jobsPage, "Delivery Glide Speed", 30, 150, Config.DeliverySpeed, function(val)
+    Config.DeliverySpeed = val
+end)
+
+createButton(jobsPage, "Teleport to Pizza Planet (Take Box)", function()
+    pcall(function()
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if hrp then
+            local shelfPos = getPizzaShelfPosition()
+            hrp.CFrame = CFrame.new(shelfPos + Vector3.new(0, 3, 0))
+            task.wait(0.2)
+            pcall(function()
+                for _, part in pairs(Workspace:GetPartBoundsInRadius(shelfPos, 10)) do
+                    interactWithObject(part)
+                end
+            end)
+        end
+    end)
+end)
+
+createButton(jobsPage, "Teleport to Active Customer (Deliver)", function()
+    pcall(function()
+        local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local customer = getActiveDeliveryCustomer()
+        if hrp and customer then
+            local custHrp = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head") or customer.PrimaryPart
+            if custHrp then
+                hrp.CFrame = CFrame.new(custHrp.Position + Vector3.new(0, 2, 2))
+                task.wait(0.2)
+                interactWithObject(customer)
+            end
+        end
+    end)
+end)
+
+createHeader(jobsPage, "Other Jobs & Automations")
 
 createToggle(jobsPage, "Auto Pizza Baker (Dough & Oven)", Config.AutoBaker, function(s)
     Config.AutoBaker = s
@@ -1077,6 +1129,183 @@ switchTab("💼 Auto Jobs")
 -- =========================================================================
 -- RUNTIME ENGINE LOOPS
 -- =========================================================================
+
+-- Pizza Delivery Helper Functions
+local function getPizzaShelfPosition()
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Model") then
+            local n = obj.Name:lower()
+            if n:find("box") or n:find("shelf") or n:find("table") or n:find("pizzabox") then
+                local p = obj.Parent
+                local pn = p and p.Name:lower() or ""
+                if n:find("pizza") or pn:find("pizza") or pn:find("deliver") then
+                    return obj:GetPivot().Position
+                end
+            end
+        end
+    end
+    return Vector3.new(1172, 14, 258)
+end
+
+local function getActiveDeliveryCustomer()
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and (obj.Name == "Arrow" or obj.Name == "OrderArrow" or obj.Name == "Marker" or obj.Name:find("Delivery")) then
+            local p = obj.Parent
+            while p and p ~= Workspace do
+                if p:FindFirstChildOfClass("Humanoid") and p ~= LocalPlayer.Character then
+                    return p
+                end
+                p = p.Parent
+            end
+        end
+    end
+
+    for _, m in pairs(Workspace:GetChildren()) do
+        if m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") and m ~= LocalPlayer.Character then
+            if m:FindFirstChild("Head") and (m.Head:FindFirstChildOfClass("BillboardGui") or m.Head:FindFirstChild("Arrow")) then
+                return m
+            end
+            for _, descendant in pairs(m:GetDescendants()) do
+                if descendant:IsA("ProximityPrompt") then
+                    local act = descendant.ActionText:lower()
+                    local objt = descendant.ObjectText:lower()
+                    if act:find("pizza") or objt:find("customer") or objt:find("order") then
+                        return m
+                    end
+                end
+            end
+        end
+    end
+
+    local npcFolder = Workspace:FindFirstChild("NPCs") or Workspace:FindFirstChild("Characters")
+    if npcFolder then
+        for _, npc in pairs(npcFolder:GetChildren()) do
+            if npc:IsA("Model") and npc:FindFirstChildOfClass("Humanoid") and npc ~= LocalPlayer.Character then
+                if npc:FindFirstChild("Head") and npc.Head:FindFirstChildOfClass("BillboardGui") then
+                    return npc
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+local function smoothGlideTo(targetPos, speed)
+    local character = LocalPlayer.Character
+    if not character then return end
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    speed = speed or 65
+    local currentPos = hrp.Position
+    local dist = (targetPos - currentPos).Magnitude
+    local duration = math.clamp(dist / speed, 0.2, 8)
+
+    local bodyVel = hrp:FindFirstChild("PullZ_GlideVel")
+    if not bodyVel then
+        bodyVel = Instance.new("BodyVelocity")
+        bodyVel.Name = "PullZ_GlideVel"
+        bodyVel.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+        bodyVel.Parent = hrp
+    end
+
+    local startTime = tick()
+    while tick() - startTime < duration and Config.AutoDelivery and character and character.Parent do
+        local alpha = math.clamp((tick() - startTime) / duration, 0, 1)
+        local nextPos = currentPos:Lerp(targetPos, alpha)
+        hrp.CFrame = CFrame.new(nextPos)
+        bodyVel.Velocity = (targetPos - hrp.Position).Unit * speed
+        RunService.Heartbeat:Wait()
+    end
+
+    if bodyVel then bodyVel:Destroy() end
+    hrp.CFrame = CFrame.new(targetPos)
+end
+
+local function interactWithObject(target)
+    if not target then return end
+    pcall(function()
+        for _, prompt in pairs(target:GetDescendants()) do
+            if prompt:IsA("ProximityPrompt") and fireproximityprompt then
+                fireproximityprompt(prompt)
+            end
+            if prompt:IsA("ClickDetector") and fireclickdetector then
+                fireclickdetector(prompt)
+            end
+        end
+    end)
+    pcall(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton1(Vector2.new(0, 0))
+    end)
+end
+
+local function runPizzaDeliveryStep()
+    local character = LocalPlayer.Character
+    if not character then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local hrp = character:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not hrp or humanoid.Health <= 0 then return end
+
+    local pizzaTool = character:FindFirstChild("Pizza") or character:FindFirstChildWhichIsA("Tool")
+    if not pizzaTool and LocalPlayer:FindFirstChild("Backpack") then
+        pizzaTool = LocalPlayer.Backpack:FindFirstChild("Pizza") or LocalPlayer.Backpack:FindFirstChildWhichIsA("Tool")
+        if pizzaTool then
+            humanoid:EquipTool(pizzaTool)
+            task.wait(0.2)
+        end
+    end
+
+    if not pizzaTool then
+        local shelfPos = getPizzaShelfPosition()
+        smoothGlideTo(shelfPos + Vector3.new(0, 3, 0), Config.DeliverySpeed)
+        task.wait(0.3)
+        pcall(function()
+            for _, part in pairs(Workspace:GetPartBoundsInRadius(shelfPos, 10)) do
+                interactWithObject(part)
+            end
+        end)
+        task.wait(Config.WorkDelay or 0.6)
+    else
+        local customer = getActiveDeliveryCustomer()
+        if customer then
+            local custHrp = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head") or customer.PrimaryPart
+            if custHrp then
+                local deliverPos = custHrp.Position + Vector3.new(0, 2, 2)
+                smoothGlideTo(deliverPos, Config.DeliverySpeed)
+                task.wait(0.3)
+                interactWithObject(customer)
+                task.wait(Config.WorkDelay or 0.6)
+            end
+        else
+            task.wait(0.8)
+        end
+    end
+end
+
+-- Pizza Delivery Background Worker Loop
+table.insert(State.Connections, task.spawn(function()
+    while true do
+        task.wait(0.3)
+        if Config.AutoDelivery and getgenv().PullZBloxburgLoaded then
+            pcall(runPizzaDeliveryStep)
+        end
+    end
+end))
+
+-- Delivery Moped Turbo Boost Loop
+table.insert(State.Connections, RunService.Heartbeat:Connect(function()
+    if Config.MopedBoost and LocalPlayer.Character then
+        local humanoid = LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid and humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
+            local seat = humanoid.SeatPart
+            seat.MaxSpeed = Config.MopedSpeed or 95
+            seat.Torque = 2.5
+            seat.TurnSpeed = 2.5
+        end
+    end
+end))
 
 -- Movement & Walkspeed Loop
 table.insert(State.Connections, RunService.Heartbeat:Connect(function()
