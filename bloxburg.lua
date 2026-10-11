@@ -81,6 +81,7 @@ local Config = {
     MopedSpeed = 38,
     AutoBaker = false,
     AutoHairdresser = false,
+    HairdresserDelay = 0.8,
     AutoCashier = false,
     AutoJanitor = false,
     AntiFaint = false,
@@ -148,7 +149,9 @@ local State = {
     LastNPCSearch = 0,
     CachedArrowPos = nil,
     CachedArrowObj = nil,
-    LastArrowSearch = 0
+    LastArrowSearch = 0,
+    CurrentHairWorkstation = nil,
+    HairServedCount = 0
 }
 
 -- ScreenGui Setup (Multi-Executor Compatibility)
@@ -929,13 +932,79 @@ local movementPage = createTab("⚡ Movement")
 local visualsPage = createTab("👁️ Visuals")
 local settingsPage = createTab("⚙️ Settings")
 
--- Forward Declarations for Delivery Engine
+-- Forward Declarations for Delivery Engine & Hairdresser
 local simulatePressE, triggerPrompt, triggerNearbyPrompts, interactWithObject
 local findDeliveryTarget, getActiveDeliveryCustomer, findNearestMoped, hasPizzaBox, smoothGlideTo, mountMoped, runPizzaDeliveryStep, findConveyorPromptAndPos
-local isRealPlayer, debugLog
+local isRealPlayer, debugLog, hairDebugLog
+local runHairdresserStep, findHairdresserWorkstations, getNearestHairWorkstation, teleportToStylez, scanHairdresserDebug
 
 -- ==================== [CATEGORY 1: AUTO JOBS] ====================
-createHeader(jobsPage, "🍕 Pizza Delivery Automation (100% Auto)")
+createHeader(jobsPage, "💇 Hairdresser Auto Farm (Stylez Studio - 100% Auto)")
+
+-- Hairdresser Status Card (Real-Time Live Status)
+local hairStatusCard = Instance.new("Frame")
+hairStatusCard.Size = UDim2.new(1, 0, 0, 42)
+hairStatusCard.BackgroundColor3 = Color3.fromRGB(20, 20, 26)
+hairStatusCard.BorderSizePixel = 0
+hairStatusCard.Parent = jobsPage
+
+local hairStatusCorner = Instance.new("UICorner")
+hairStatusCorner.CornerRadius = UDim.new(0, 6)
+hairStatusCorner.Parent = hairStatusCard
+
+local hairStatusLabel = Instance.new("TextLabel")
+hairStatusLabel.Size = UDim2.new(1, -20, 1, 0)
+hairStatusLabel.Position = UDim2.new(0, 12, 0, 0)
+hairStatusLabel.BackgroundTransparency = 1
+hairStatusLabel.Text = "✂️ Status: Oprit (Apasă START pentru Hairdresser Auto)"
+hairStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 160)
+hairStatusLabel.Font = Enum.Font.GothamMedium
+hairStatusLabel.TextSize = 11
+hairStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+hairStatusLabel.Parent = hairStatusCard
+
+hairDebugLog = function(tag, message, color)
+    local timeStr = os.date("%H:%M:%S")
+    local line = string.format("[PullZ Hairdresser][%s][%s] %s", timeStr, tag, message)
+    print(line)
+    if hairStatusLabel then
+        pcall(function()
+            hairStatusLabel.Text = string.format("[%s] %s", tag, message)
+            if color then
+                hairStatusLabel.TextColor3 = color
+            else
+                hairStatusLabel.TextColor3 = Color3.fromRGB(220, 220, 220)
+            end
+        end)
+    end
+end
+
+createToggle(jobsPage, "🚀 START / STOP Auto Hairdresser", Config.AutoHairdresser, function(s)
+    Config.AutoHairdresser = s
+    if s then
+        hairDebugLog("START", "Auto Hairdresser PORNIT! Mod complet autonom activat. 💇", Color3.fromRGB(100, 255, 150))
+    else
+        hairDebugLog("STOP", "Auto Hairdresser OPRIT. 🛑", Color3.fromRGB(255, 100, 100))
+    end
+end)
+
+createButton(jobsPage, "📍 Teleport la Stylez Hair Studio (Scaun Liber)", function()
+    if teleportToStylez then
+        teleportToStylez()
+    end
+end)
+
+createSlider(jobsPage, "⏱️ Viteza de Servire (Delay Secunde)", 0.2, 2.5, Config.HairdresserDelay or 0.8, function(val)
+    Config.HairdresserDelay = val
+end)
+
+createButton(jobsPage, "🔍 Scanează Stație Hairdresser (Debug F9)", function()
+    if scanHairdresserDebug then
+        scanHairdresserDebug()
+    end
+end)
+
+createHeader(jobsPage, "🍕 Pizza Delivery Automation (Alternativ)")
 
 -- Status Card (Real-Time Live Status)
 local statusCard = Instance.new("Frame")
@@ -1037,10 +1106,6 @@ createHeader(jobsPage, "Other Jobs & Automations")
 
 createToggle(jobsPage, "Auto Pizza Baker (Dough & Oven)", Config.AutoBaker, function(s)
     Config.AutoBaker = s
-end)
-
-createToggle(jobsPage, "Auto Hairdresser / Stylez Station", Config.AutoHairdresser, function(s)
-    Config.AutoHairdresser = s
 end)
 
 createToggle(jobsPage, "Auto Blox Burger Cashier", Config.AutoCashier, function(s)
@@ -2121,6 +2186,307 @@ table.insert(State.Connections, task.spawn(function()
                 debugLog("EROARE", tostring(err), Color3.fromRGB(255, 80, 80))
             end
             isRunningDeliveryStep = false
+        end
+    end
+end))
+
+-- =========================================================================
+-- HAIRDRESSER / STYLEZ HAIR STUDIO AUTOMATION SUITE
+-- =========================================================================
+
+-- Find all Hairdresser Workstations in Workspace
+findHairdresserWorkstations = function()
+    local stations = {}
+
+    -- 1. Check known Bloxburg hierarchy paths
+    pcall(function()
+        local loc = Workspace:FindFirstChild("Environment")
+        if loc then loc = loc:FindFirstChild("Locations") end
+        if loc then loc = loc:FindFirstChild("StylezHairStudio") end
+        if loc then
+            local wsFolder = loc:FindFirstChild("HairdresserWorkstations") or loc:FindFirstChild("Workstations") or loc
+            for _, child in ipairs(wsFolder:GetChildren()) do
+                if child:IsA("Model") or child:IsA("Folder") then
+                    table.insert(stations, child)
+                end
+            end
+        end
+    end)
+    if #stations > 0 then return stations end
+
+    -- 2. Check direct Workspace children/descendants
+    pcall(function()
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name == "HairdresserWorkstations" or obj.Name == "HairWorkstations" then
+                for _, child in ipairs(obj:GetChildren()) do
+                    if child:IsA("Model") or child:IsA("Folder") then
+                        table.insert(stations, child)
+                    end
+                end
+            end
+        end
+    end)
+    if #stations > 0 then return stations end
+
+    -- 3. Search for any model named workstation or hairdresser
+    pcall(function()
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj:IsA("Model") then
+                local on = obj.Name:lower()
+                if (on:find("hairdresser") or on:find("stylez")) and (obj:FindFirstChild("Chair") or obj:FindFirstChild("Seat") or obj:FindFirstChild("Occupied") or obj:FindFirstChild("Mirror")) then
+                    table.insert(stations, obj)
+                end
+            end
+        end
+    end)
+
+    return stations
+end
+
+-- Get nearest Hairdresser Workstation to LocalPlayer
+getNearestHairWorkstation = function()
+    local char = LocalPlayer.Character
+    if not char then return nil, math.huge end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil, math.huge end
+
+    local stations = findHairdresserWorkstations()
+    local closest, closestDist = nil, math.huge
+
+    for _, st in ipairs(stations) do
+        local part = st.PrimaryPart or st:FindFirstChild("Chair") or st:FindFirstChild("Seat") or st:FindFirstChild("Mirror") or st:FindFirstChildWhichIsA("BasePart")
+        if part then
+            local d = (part.Position - hrp.Position).Magnitude
+            if d < closestDist then
+                closestDist = d
+                closest = st
+            end
+        end
+    end
+    return closest, closestDist
+end
+
+-- Teleport directly to Stylez Hair Studio workstation
+teleportToStylez = function()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local station, dist = getNearestHairWorkstation()
+    if station then
+        local targetPart = station.PrimaryPart or station:FindFirstChild("Chair") or station:FindFirstChild("Seat") or station:FindFirstChildWhichIsA("BasePart")
+        if targetPart then
+            -- Position behind chair facing mirror
+            hrp.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 3, 3), targetPart.Position)
+            hairDebugLog("STYLEZ", "Teleportat la postul de lucru Stylez! 💇", Color3.fromRGB(100, 255, 150))
+            return
+        end
+    end
+
+    -- Fallback: Search for StylezHairStudio Model pivot
+    local found = false
+    pcall(function()
+        for _, obj in ipairs(Workspace:GetDescendants()) do
+            if obj.Name:lower():find("stylezhair") or obj.Name == "StylezHairStudio" then
+                hrp.CFrame = obj:GetPivot() + Vector3.new(0, 4, 0)
+                hairDebugLog("STYLEZ", "Teleportat la Stylez Hair Studio! 💇", Color3.fromRGB(100, 255, 150))
+                found = true
+                return
+            end
+        end
+    end)
+
+    if not found then
+        -- Default Bloxburg town coordinates near salon
+        hrp.CFrame = CFrame.new(-115, 14, -110)
+        hairDebugLog("STYLEZ", "Teleportat în zona Stylez Hair Studio (Centru)! 💇", Color3.fromRGB(100, 255, 150))
+    end
+end
+
+-- Debug Scanner for Stylez Hairdresser
+scanHairdresserDebug = function()
+    pcall(function()
+        local StarterGui = game:GetService("StarterGui")
+        StarterGui:SetCore("DevConsoleVisible", true)
+    end)
+    hairDebugLog("SCAN", "Încep scanarea salonului... Detalii în consola F9!", Color3.fromRGB(100, 200, 255))
+    print("---------------- [HAIRDRESSER DEBUG SCAN] ----------------")
+    local stations = findHairdresserWorkstations()
+    print(string.format("[HAIR DEBUG] Posturi de lucru găsite în Workspace: %d", #stations))
+    for i, st in ipairs(stations) do
+        local occ = st:FindFirstChild("Occupied")
+        local occVal = occ and tostring(occ.Value) or "nil"
+        local pos = st:GetPivot().Position
+        print(string.format("  [%d] Nume: '%s' | Părinte: '%s' | Occupied: %s | Pos: %s", i, st.Name, st.Parent and st.Parent.Name or "nil", occVal, tostring(pos)))
+        for _, c in ipairs(st:GetChildren()) do
+            print(string.format("     -> Obiect: '%s' (%s)", c.Name, c.ClassName))
+        end
+    end
+
+    -- Scan PlayerGui
+    local pg = LocalPlayer:FindFirstChild("PlayerGui")
+    if pg then
+        print("[HAIR DEBUG] Scanare PlayerGui pentru interfețe Job/Hair:")
+        for _, gui in ipairs(pg:GetChildren()) do
+            local gName = gui.Name:lower()
+            if gName:find("hair") or gName:find("style") or gName:find("job") or gName:find("work") then
+                print(string.format("  -> Găsit GUI: '%s' (Visible: %s)", gui.Name, tostring(gui.Enabled or true)))
+                for _, el in ipairs(gui:GetDescendants()) do
+                    if el:IsA("GuiButton") or el:IsA("TextLabel") then
+                        print(string.format("     -> Element: '%s' (%s) Text: '%s'", el.Name, el.ClassName, el:IsA("TextLabel") and el.Text or (el:IsA("TextButton") and el.Text or "")))
+                    end
+                end
+            end
+        end
+    end
+    print("----------------------------------------------------------")
+end
+
+-- Core Auto Hairdresser Step Function
+runHairdresserStep = function()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not hrp or humanoid.Health <= 0 then return end
+
+    -- 1. Găsește cel mai apropiat post de lucru (Workstation)
+    local station, dist = getNearestHairWorkstation()
+    if not station then
+        hairDebugLog("STAȚIE", "Niciun post de lucru găsit! Mergi la Stylez sau apasă Teleport.", Color3.fromRGB(255, 150, 100))
+        task.wait(1.0)
+        return
+    end
+
+    State.CurrentHairWorkstation = station
+
+    -- 2. Dacă ești departe de stație (> 12 studs), poziționează-te la scaun
+    local targetPart = station.PrimaryPart or station:FindFirstChild("Chair") or station:FindFirstChild("Seat") or station:FindFirstChildWhichIsA("BasePart")
+    if dist > 12 and targetPart then
+        hairDebugLog("POZIȚIONARE", "Mă poziționez în spatele scaunului de frizer...", Color3.fromRGB(255, 200, 100))
+        hrp.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 3, 3), targetPart.Position)
+        task.wait(0.4)
+        return
+    end
+
+    -- 3. Verifică dacă există un client așezat pe scaun
+    local isOccupied = false
+    local occVal = station:FindFirstChild("Occupied")
+    if occVal and (occVal.Value == true or (typeof(occVal.Value) == "Instance" and occVal.Value ~= nil)) then
+        isOccupied = true
+    end
+
+    -- Verifică și scaunul fizic dacă are occupant
+    local chair = station:FindFirstChild("Chair") or station:FindFirstChild("Seat") or station:FindFirstChildWhichIsA("Seat")
+    if chair and chair:IsA("Seat") and chair.Occupant then
+        isOccupied = true
+    end
+
+    -- Verifică dacă există model de NPC lângă scaun
+    if not isOccupied and targetPart then
+        for _, model in ipairs(Workspace:GetPartBoundsInRadius(targetPart.Position, 5)) do
+            local parent = model.Parent
+            if parent and parent:IsA("Model") and parent ~= char and parent:FindFirstChildOfClass("Humanoid") then
+                isOccupied = true
+                break
+            end
+        end
+    end
+
+    -- 4. Dacă NU este client așezat, așteaptă și ține stația activă
+    if not isOccupied then
+        hairDebugLog("AȘTEPTARE", "Aștept clientul din rând să se așeze pe scaun... ⏳", Color3.fromRGB(200, 200, 220))
+        simulatePressE(0.2)
+        triggerNearbyPrompts(hrp.Position, 8)
+        task.wait(0.5)
+        return
+    end
+
+    -- 5. Client PREZENT! Rezolvă comanda (Stil + Culoare + Done)
+    hairDebugLog("CLIENT", "Client pe scaun! Finalizez comanda frizurii... ✂️", Color3.fromRGB(100, 200, 255))
+
+    -- A) Încearcă declanșarea prin RemoteEvents (Bloxburg Workstation Remotes)
+    pcall(function()
+        local rep = game:GetService("ReplicatedStorage")
+        for _, r in ipairs(rep:GetDescendants()) do
+            if r:IsA("RemoteEvent") then
+                local rn = r.Name:lower()
+                if rn:find("job") or rn:find("work") or rn:find("hair") or rn:find("order") or rn:find("station") then
+                    pcall(function() r:FireServer({ Type = "FinishOrder", Workstation = station }) end)
+                    pcall(function() r:FireServer("FinishOrder", station) end)
+                    pcall(function() r:FireServer({ Type = "StylezHairdresser", Workstation = station }) end)
+                end
+            end
+        end
+    end)
+
+    -- B) Caută și apasă butoanele din PlayerGui sau SurfaceGui (Done / Finish / Submit)
+    local buttonClicked = false
+    pcall(function()
+        local pg = LocalPlayer:FindFirstChild("PlayerGui")
+        if pg then
+            for _, btn in ipairs(pg:GetDescendants()) do
+                if btn:IsA("GuiButton") and btn.Visible then
+                    local bName = btn.Name:lower()
+                    local bText = (btn:IsA("TextButton") and btn.Text:lower()) or ""
+                    if bName:find("done") or bName:find("finish") or bName:find("complete") or bText:find("done") or bText:find("finish") or bText:find("gata") then
+                        if firesignal then
+                            pcall(function() firesignal(btn.MouseButton1Click) end)
+                            pcall(function() firesignal(btn.Activated) end)
+                        end
+                        pcall(function()
+                            VirtualUser:CaptureController()
+                            local absPos = btn.AbsolutePosition + (btn.AbsoluteSize / 2)
+                            VirtualUser:ClickButton1(absPos)
+                        end)
+                        buttonClicked = true
+                    end
+                end
+            end
+        end
+    end)
+
+    -- C) Interacțiune fizică / click pe oglindă / ecran
+    pcall(function()
+        if targetPart then
+            triggerNearbyPrompts(targetPart.Position, 8)
+        end
+        simulatePressE(0.3)
+        for _, cd in ipairs(station:GetDescendants()) do
+            if cd:IsA("ClickDetector") then
+                pcall(function() fireclickdetector(cd) end)
+            end
+        end
+    end)
+
+    -- D) Click în centrul ecranului (Mirror UI Done button fallback)
+    pcall(function()
+        VirtualUser:CaptureController()
+        local vp = Camera.ViewportSize
+        VirtualUser:ClickButton1(Vector2.new(vp.X / 2, vp.Y * 0.65))
+    end)
+
+    -- Actualizare statistici
+    State.HairServedCount = (State.HairServedCount or 0) + 1
+    hairDebugLog("SUCCES", string.format("🎉 Client servit cu succes! (Total clienți: %d)", State.HairServedCount), Color3.fromRGB(100, 255, 150))
+
+    -- Delay reglabil între clienți
+    task.wait(Config.HairdresserDelay or 0.8)
+end
+
+-- Hairdresser Background Worker Loop
+local isRunningHairStep = false
+table.insert(State.Connections, task.spawn(function()
+    while true do
+        task.wait(Config.HairdresserDelay or 0.8)
+        if Config.AutoHairdresser and getgenv().PullZBloxburgLoaded and not isRunningHairStep then
+            isRunningHairStep = true
+            local ok, err = pcall(runHairdresserStep)
+            if not ok then
+                hairDebugLog("EROARE", tostring(err), Color3.fromRGB(255, 80, 80))
+            end
+            isRunningHairStep = false
         end
     end
 end))
