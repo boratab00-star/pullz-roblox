@@ -160,6 +160,11 @@ end
 State.ScreenGui = ScreenGui
 getgenv().PullZScreenGui = ScreenGui
 
+-- Forward declarations for lexical scoping across closures
+local BorderFrame = nil
+local Watermark = nil
+local MinimizedBtn = nil
+
 -- =========================================================================
 -- SIGNATURE PULLZ LOADING SCREEN
 -- =========================================================================
@@ -316,7 +321,7 @@ end)
 -- =========================================================================
 -- HUD & WATERMARK PILL
 -- =========================================================================
-local Watermark = Instance.new("Frame")
+Watermark = Instance.new("Frame")
 Watermark.Name = "WatermarkHUD"
 Watermark.Size = UDim2.new(0, 240, 0, 30)
 Watermark.Position = UDim2.new(0, 14, 0, 14)
@@ -366,7 +371,7 @@ end))
 -- =========================================================================
 -- SIGNATURE PULLZ MAIN WINDOW & ROTATING BORDER
 -- =========================================================================
-local BorderFrame = Instance.new("Frame")
+BorderFrame = Instance.new("Frame")
 BorderFrame.Name = "PullZ_Border"
 BorderFrame.Size = UDim2.new(0, 684, 0, 484)
 BorderFrame.Position = UDim2.new(0.5, -342, 0.5, -242)
@@ -403,7 +408,7 @@ MainCorner.CornerRadius = UDim.new(0, 8)
 MainCorner.Parent = MainFrame
 
 -- Minimized Pill Button
-local MinimizedBtn = Instance.new("TextButton")
+MinimizedBtn = Instance.new("TextButton")
 MinimizedBtn.Name = "PullZ_Minimized"
 MinimizedBtn.Size = UDim2.new(0, 110, 0, 44)
 MinimizedBtn.Position = UDim2.new(0.5, -55, 0, 10)
@@ -1125,6 +1130,16 @@ diagText.Parent = diagCard
 
 -- Select First Tab
 switchTab("💼 Auto Jobs")
+
+-- Reveal Fail-Safe (Guarantees menu and watermark are shown even if tween or wait lags)
+task.delay(1.5, function()
+    if BorderFrame and BorderFrame.Parent and not BorderFrame.Visible and (not MinimizedBtn or not MinimizedBtn.Visible) then
+        BorderFrame.Visible = true
+    end
+    if Watermark and Watermark.Parent and Config.WatermarkEnabled and not Watermark.Visible then
+        Watermark.Visible = true
+    end
+end)
 
 -- =========================================================================
 -- RUNTIME ENGINE LOOPS
