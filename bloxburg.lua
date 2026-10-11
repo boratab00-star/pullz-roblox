@@ -151,19 +151,14 @@ local State = {
     CachedArrowObj = nil,
     CurrentHairWorkstation = nil,
     HairServedCount = 0,
+    HairEarnedEst = 0,
     CapturedHairRemote = nil,
     CapturedHairArgs = nil,
-    CapturedHairStation = nil,
-    IsHairLearned = false,
-    HairLearningMode = false,
-    CapturedDoneButton = nil,
-    CapturedDonePos = nil,
-    LearnedClickPos = nil,
     LastHairLogTime = 0,
     LastHairServiceTime = 0
 }
 
--- Metamethod Hook for Hairdresser Network Capture
+-- Metamethod Hook for Background Network Remote Capture
 pcall(function()
     if hookmetamethod then
         local oldNamecall
@@ -180,28 +175,12 @@ pcall(function()
 
                 for _, a in ipairs(args) do
                     local as = tostring(a):lower()
-                    if as:find("hair") or as:find("order") or as:find("finish") or as:find("done") or as:find("station") then
+                    if as:find("hair") or as:find("order") or as:find("jobcompleted") or as:find("towork") then
                         isHairCandidate = true
-                    end
-                    if type(a) == "table" then
-                        for k, v in pairs(a) do
-                            local ks = tostring(k):lower()
-                            local vs = tostring(v):lower()
-                            if ks:find("order") or vs:find("order") or ks:find("hair") or vs:find("hair") or ks:find("done") or vs:find("finish") or ks:find("station") then
-                                isHairCandidate = true
-                            end
-                        end
                     end
                 end
 
-                if State.HairLearningMode then
-                    print(string.format("[LEARN REMOTE] %s pe '%s' (%s)", method, self.Name, self.ClassName))
-                    if isHairCandidate or self.Parent == game:GetService("ReplicatedStorage") then
-                        State.CapturedHairRemote = self
-                        State.CapturedHairArgs = args
-                        print("[PullZ Hairdresser] ✅ Remote capturat: " .. tostring(self:GetFullName()))
-                    end
-                elseif isHairCandidate then
+                if isHairCandidate then
                     State.CapturedHairRemote = self
                     State.CapturedHairArgs = args
                 end
@@ -993,10 +972,10 @@ local settingsPage = createTab("⚙️ Settings")
 local simulatePressE, triggerPrompt, triggerNearbyPrompts, interactWithObject
 local findDeliveryTarget, getActiveDeliveryCustomer, findNearestMoped, hasPizzaBox, smoothGlideTo, mountMoped, runPizzaDeliveryStep, findConveyorPromptAndPos
 local isRealPlayer, debugLog, hairDebugLog
-local runHairdresserStep, findHairdresserWorkstations, getNearestHairWorkstation, teleportToStylez, scanHairdresserDebug, scanMirrorGuiNow, startHairLearning
+local runHairdresserStep, findHairdresserWorkstations, getNearestHairWorkstation, teleportToStylez
 
 -- ==================== [CATEGORY 1: AUTO JOBS] ====================
-createHeader(jobsPage, "💇 Hairdresser Auto Farm (Stylez Studio - 100% Auto)")
+createHeader(jobsPage, "💇 Stylez Hair Studio (100% Autonomous Auto-Farm)")
 
 -- Hairdresser Status Card (Real-Time Live Status)
 local hairStatusCard = Instance.new("Frame")
@@ -1013,7 +992,7 @@ local hairStatusLabel = Instance.new("TextLabel")
 hairStatusLabel.Size = UDim2.new(1, -20, 1, 0)
 hairStatusLabel.Position = UDim2.new(0, 12, 0, 0)
 hairStatusLabel.BackgroundTransparency = 1
-hairStatusLabel.Text = "✂️ Status: Oprit (Așază-te la scaun și apasă Sincronizează)"
+hairStatusLabel.Text = "💈 Status: Oprit (Activează toggle-ul - Zero Muncă)"
 hairStatusLabel.TextColor3 = Color3.fromRGB(150, 150, 160)
 hairStatusLabel.Font = Enum.Font.GothamMedium
 hairStatusLabel.TextSize = 11
@@ -1036,37 +1015,17 @@ hairDebugLog = function(tag, message, color)
     end
 end
 
-createToggle(jobsPage, "🚀 START / STOP Auto Hairdresser", Config.AutoHairdresser, function(s)
+createToggle(jobsPage, "⚡ START Auto Hairdresser (100% Automat)", Config.AutoHairdresser, function(s)
     Config.AutoHairdresser = s
     if s then
-        if State.IsHairLearned then
-            hairDebugLog("START", "Auto Hairdresser PORNIT! Stație sincronizată, servesc clienții automat. 💇", Color3.fromRGB(100, 255, 150))
-        else
-            hairDebugLog("START", "Auto Hairdresser PORNIT! Dacă nu preia singur, apasă '🎯 Sincronizează'. 💇", Color3.fromRGB(255, 200, 100))
-        end
+        hairDebugLog("START", "Auto Hairdresser ACTIVAT! Caut post de lucru & servesc automat toți clienții... 💈", Color3.fromRGB(100, 255, 150))
+        if teleportToStylez then teleportToStylez() end
     else
         hairDebugLog("STOP", "Auto Hairdresser OPRIT. 🛑", Color3.fromRGB(255, 100, 100))
     end
 end)
 
-createButton(jobsPage, "🎯 Sincronizează (Fă 1 Cut Manual - Auto-Learn)", function()
-    if startHairLearning then
-        startHairLearning()
-    else
-        State.HairLearningMode = true
-        State.IsHairLearned = false
-        Config.AutoHairdresser = true
-        hairDebugLog("ÎNVĂȚARE", "👉 Pune-te la scaun (în First Person), tunde 1 client și apasă Done!", Color3.fromRGB(255, 200, 100))
-    end
-end)
-
-createButton(jobsPage, "🔍 Scanează GUI Oglindă (F9 Debug - La Scaun)", function()
-    if scanMirrorGuiNow then
-        scanMirrorGuiNow()
-    end
-end)
-
-createButton(jobsPage, "📍 Teleport la Stylez Hair Studio (Scaun Liber)", function()
+createButton(jobsPage, "📍 Teleportează la Scaun Liber & Începe Jobul", function()
     if teleportToStylez then
         teleportToStylez()
     end
@@ -2263,33 +2222,185 @@ table.insert(State.Connections, task.spawn(function()
 end))
 
 -- =========================================================================
--- HAIRDRESSER / STYLEZ HAIR STUDIO AUTOMATION SUITE
+-- HAIRDRESSER / STYLEZ HAIR STUDIO AUTOMATION SUITE (100% AUTONOMOUS V2)
 -- =========================================================================
+
+-- Bloxburg Network & Anti-Cheat Stack Bypass Layer
+local BloxburgNetwork = {
+    DataService = nil,
+    GetRemote = nil,
+    Initialized = false,
+    LastInitAttempt = 0
+}
+
+-- Anti-Stack / Script integrity safety hook (pcall protected)
+pcall(function()
+    if getgc and hookfunction and debug and debug.getinfo then
+        for _, value in pairs(getgc()) do
+            if typeof(value) == "function" and not (iscclosure and iscclosure(value)) then
+                local info = debug.getinfo(value)
+                if info and info.name == "i" then
+                    hookfunction(value, function() end)
+                end
+            end
+        end
+    end
+end)
+
+local function initBloxburgNetwork()
+    if BloxburgNetwork.Initialized and BloxburgNetwork.GetRemote then return true end
+    if tick() - BloxburgNetwork.LastInitAttempt < 2 then return false end
+    BloxburgNetwork.LastInitAttempt = tick()
+
+    pcall(function()
+        local rep = game:GetService("ReplicatedStorage")
+        local modules = rep:FindFirstChild("Modules")
+        local dsModule = (modules and modules:FindFirstChild("DataService")) or rep:FindFirstChild("DataService", true)
+
+        if dsModule and dsModule:IsA("ModuleScript") then
+            local ok, ds = pcall(require, dsModule)
+            if ok and ds then
+                BloxburgNetwork.DataService = ds
+
+                -- Strategy 1: debug.getupvalue(ds.FireServer, 5)
+                if debug and debug.getupvalue and ds.FireServer then
+                    local okUp, fn = pcall(debug.getupvalue, ds.FireServer, 5)
+                    if okUp and typeof(fn) == "function" then
+                        local testOk, testRes = pcall(fn, "JobCompleted")
+                        if testOk and typeof(testRes) == "Instance" and (testRes:IsA("RemoteEvent") or testRes:IsA("RemoteFunction")) then
+                            BloxburgNetwork.GetRemote = fn
+                            BloxburgNetwork.Initialized = true
+                            return
+                        end
+                    end
+
+                    -- Strategy 2: Dynamic upvalue scan (1 to 20)
+                    for i = 1, 20 do
+                        local upOk, candidate = pcall(debug.getupvalue, ds.FireServer, i)
+                        if upOk and typeof(candidate) == "function" then
+                            local testOk, testRes = pcall(candidate, "JobCompleted")
+                            if testOk and typeof(testRes) == "Instance" and (testRes:IsA("RemoteEvent") or testRes:IsA("RemoteFunction")) then
+                                BloxburgNetwork.GetRemote = candidate
+                                BloxburgNetwork.Initialized = true
+                                return
+                            end
+                            local testOk2, testRes2 = pcall(candidate, "ToWork")
+                            if testOk2 and typeof(testRes2) == "Instance" and (testRes2:IsA("RemoteEvent") or testRes2:IsA("RemoteFunction")) then
+                                BloxburgNetwork.GetRemote = candidate
+                                BloxburgNetwork.Initialized = true
+                                return
+                            end
+                        end
+                    end
+                end
+
+                BloxburgNetwork.Initialized = true
+            end
+        end
+    end)
+
+    return BloxburgNetwork.Initialized
+end
+
+local function fireBloxburgRemote(actionType, payload)
+    initBloxburgNetwork()
+    local sent = false
+
+    -- 1. Direct GetRemote(actionType):FireServer(payload)
+    if BloxburgNetwork.GetRemote then
+        pcall(function()
+            local remote = BloxburgNetwork.GetRemote(actionType)
+            if remote and typeof(remote) == "Instance" then
+                if remote:IsA("RemoteEvent") then
+                    remote:FireServer(payload)
+                    sent = true
+                elseif remote:IsA("RemoteFunction") then
+                    remote:InvokeServer(payload)
+                    sent = true
+                end
+            end
+        end)
+    end
+
+    -- 2. DataService.FireServer fallback
+    if not sent and BloxburgNetwork.DataService then
+        pcall(function()
+            if BloxburgNetwork.DataService.FireServer then
+                BloxburgNetwork.DataService.FireServer(actionType, payload)
+                sent = true
+            end
+        end)
+        if not sent then
+            pcall(function()
+                if BloxburgNetwork.DataService.FireServer then
+                    BloxburgNetwork.DataService:FireServer(actionType, payload)
+                    sent = true
+                end
+            end)
+        end
+    end
+
+    -- 3. Direct ReplicatedStorage RemoteEvent fallback
+    if not sent then
+        pcall(function()
+            local rep = game:GetService("ReplicatedStorage")
+            for _, r in ipairs(rep:GetDescendants()) do
+                if r:IsA("RemoteEvent") and (r.Name:lower():find("data") or r.Name:lower():find("job") or r.Name == actionType) then
+                    r:FireServer(payload)
+                    sent = true
+                    break
+                end
+            end
+        end)
+    end
+
+    return sent
+end
+
+-- Ensure player is currently clocked in at StylezHairdresser
+local function ensureHairJob()
+    local rep = game:GetService("ReplicatedStorage")
+    local stats = rep:FindFirstChild("Stats")
+    local pStats = stats and stats:FindFirstChild(LocalPlayer.Name)
+    local jobVal = (pStats and pStats:FindFirstChild("Job") and pStats.Job.Value) or ""
+
+    if jobVal ~= "StylezHairdresser" then
+        hairDebugLog("JOB", "Pornesc schimbul de lucru Stylez Hairdresser... 💼", Color3.fromRGB(100, 200, 255))
+        fireBloxburgRemote("ToWork", { Type = "ToWork", Name = "StylezHairdresser" })
+        task.wait(0.5)
+    end
+end
 
 -- Find all Hairdresser Workstations in Workspace
 findHairdresserWorkstations = function()
     local stations = {}
 
-    -- 1. Check known Bloxburg hierarchy paths
+    -- 1. Check known primary Bloxburg hierarchy path
     pcall(function()
-        local loc = Workspace:FindFirstChild("Environment")
-        if loc then loc = loc:FindFirstChild("Locations") end
-        if loc then loc = loc:FindFirstChild("StylezHairStudio") end
-        if loc then
-            local wsFolder = loc:FindFirstChild("HairdresserWorkstations") or loc:FindFirstChild("Workstations") or loc
-            for _, child in ipairs(wsFolder:GetChildren()) do
-                if child:IsA("Model") or child:IsA("Folder") then
-                    table.insert(stations, child)
+        local env = Workspace:FindFirstChild("Environment")
+        if env then
+            local loc = env:FindFirstChild("Locations")
+            if loc then
+                local stylez = loc:FindFirstChild("StylezHairStudio")
+                if stylez then
+                    local folder = stylez:FindFirstChild("HairdresserWorkstations") or stylez:FindFirstChild("Workstations") or stylez
+                    for _, child in ipairs(folder:GetChildren()) do
+                        if child:IsA("Model") or child:IsA("Folder") then
+                            if child:FindFirstChild("Chair") or child:FindFirstChild("Seat") or child.PrimaryPart then
+                                table.insert(stations, child)
+                            end
+                        end
+                    end
                 end
             end
         end
     end)
     if #stations > 0 then return stations end
 
-    -- 2. Check direct Workspace children/descendants
+    -- 2. Check direct Workspace descendants for HairdresserWorkstations
     pcall(function()
         for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj.Name == "HairdresserWorkstations" or obj.Name == "HairWorkstations" then
+            if obj.Name == "HairdresserWorkstations" then
                 for _, child in ipairs(obj:GetChildren()) do
                     if child:IsA("Model") or child:IsA("Folder") then
                         table.insert(stations, child)
@@ -2300,12 +2411,12 @@ findHairdresserWorkstations = function()
     end)
     if #stations > 0 then return stations end
 
-    -- 3. Search for any model named workstation or hairdresser
+    -- 3. Dynamic scan fallback
     pcall(function()
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("Model") then
                 local on = obj.Name:lower()
-                if (on:find("hairdresser") or on:find("stylez")) and (obj:FindFirstChild("Chair") or obj:FindFirstChild("Seat") or obj:FindFirstChild("Occupied") or obj:FindFirstChild("Mirror")) then
+                if (on:find("hairdresser") or on:find("stylez")) and (obj:FindFirstChild("Chair") or obj:FindFirstChild("Seat") or obj:FindFirstChild("Mirror")) then
                     table.insert(stations, obj)
                 end
             end
@@ -2338,359 +2449,98 @@ getNearestHairWorkstation = function()
     return closest, closestDist
 end
 
+-- Get Spawned Characters Folder for Bloxburg Customers
+local function getSpawnedCharactersFolder()
+    local gameFolder = Workspace:FindFirstChild("_game")
+    if gameFolder and gameFolder:FindFirstChild("SpawnedCharacters") then
+        return gameFolder.SpawnedCharacters
+    end
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj.Name == "SpawnedCharacters" or (obj.Name == "_game" and obj:FindFirstChild("SpawnedCharacters")) then
+            return obj:FindFirstChild("SpawnedCharacters") or obj
+        end
+    end
+    return Workspace:FindFirstChild("SpawnedCharacters", true)
+end
+
+-- Find the Customer NPC currently seated at this workstation
+local function getCustomerForStation(station)
+    if not station then return nil, math.huge end
+    local stPart = station.PrimaryPart or station:FindFirstChild("Chair") or station:FindFirstChild("Seat") or station:FindFirstChildWhichIsA("BasePart")
+    if not stPart then return nil, math.huge end
+
+    local scFolder = getSpawnedCharactersFolder()
+    if not scFolder then return nil, math.huge end
+
+    local bestCustomer = nil
+    local bestDist = math.huge
+
+    for _, char in ipairs(scFolder:GetChildren()) do
+        local cName = char.Name:lower()
+        if cName:find("stylez") or cName:find("customer") or cName:find("hair") or char.Name == "StylezHairStudioCustomer" then
+            local cRoot = char.PrimaryPart or char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChildWhichIsA("BasePart")
+            if cRoot then
+                local d = (cRoot.Position - stPart.Position).Magnitude
+                if d < 6.5 and d < bestDist then
+                    bestDist = d
+                    bestCustomer = char
+                end
+            end
+        end
+    end
+
+    return bestCustomer, bestDist
+end
+
 -- Teleport directly to Stylez Hair Studio workstation
 teleportToStylez = function()
     local char = LocalPlayer.Character
-    if not char then return end
+    if not char then return nil end
     local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
+    if not hrp then return nil end
 
-    local station, dist = getNearestHairWorkstation()
-    if station then
-        local targetPart = station.PrimaryPart or station:FindFirstChild("Chair") or station:FindFirstChild("Seat") or station:FindFirstChildWhichIsA("BasePart")
-        if targetPart then
-            -- Position behind chair facing mirror
-            hrp.CFrame = CFrame.new(targetPart.Position + Vector3.new(0, 3, 3), targetPart.Position)
-            hairDebugLog("STYLEZ", "Teleportat la postul de lucru Stylez! 💇", Color3.fromRGB(100, 255, 150))
-            return
-        end
-    end
+    ensureHairJob()
 
-    -- Fallback: Search for StylezHairStudio Model pivot
-    local found = false
-    pcall(function()
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj.Name:lower():find("stylezhair") or obj.Name == "StylezHairStudio" then
-                hrp.CFrame = obj:GetPivot() + Vector3.new(0, 4, 0)
-                hairDebugLog("STYLEZ", "Teleportat la Stylez Hair Studio! 💇", Color3.fromRGB(100, 255, 150))
-                found = true
-                return
-            end
-        end
-    end)
-
-    if not found then
-        -- Default Bloxburg town coordinates near salon
-        hrp.CFrame = CFrame.new(-115, 14, -110)
-        hairDebugLog("STYLEZ", "Teleportat în zona Stylez Hair Studio (Centru)! 💇", Color3.fromRGB(100, 255, 150))
-    end
-end
-
--- Debug Scanner for Stylez Hairdresser
-scanHairdresserDebug = function()
-    pcall(function()
-        local StarterGui = game:GetService("StarterGui")
-        StarterGui:SetCore("DevConsoleVisible", true)
-    end)
-    hairDebugLog("SCAN", "Încep scanarea salonului... Detalii în consola F9!", Color3.fromRGB(100, 200, 255))
-    print("---------------- [HAIRDRESSER DEBUG SCAN] ----------------")
     local stations = findHairdresserWorkstations()
-    print(string.format("[HAIR DEBUG] Posturi de lucru găsite în Workspace: %d", #stations))
-    for i, st in ipairs(stations) do
-        local occ = st:FindFirstChild("Occupied")
-        local occVal = occ and tostring(occ.Value) or "nil"
-        local pos = st:GetPivot().Position
-        print(string.format("  [%d] Nume: '%s' | Părinte: '%s' | Occupied: %s | Pos: %s", i, st.Name, st.Parent and st.Parent.Name or "nil", occVal, tostring(pos)))
-        for _, c in ipairs(st:GetChildren()) do
-            print(string.format("     -> Obiect: '%s' (%s)", c.Name, c.ClassName))
+    local bestStation = nil
+
+    for _, st in ipairs(stations) do
+        local stPart = st.PrimaryPart or st:FindFirstChild("Chair") or st:FindFirstChild("Seat") or st:FindFirstChildWhichIsA("BasePart")
+        if stPart then
+            bestStation = st
+            break
         end
     end
 
-    -- Scan PlayerGui
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if pg then
-        print("[HAIR DEBUG] Scanare PlayerGui pentru interfețe Job/Hair:")
-        for _, gui in ipairs(pg:GetChildren()) do
-            local gName = gui.Name:lower()
-            if gName:find("hair") or gName:find("style") or gName:find("job") or gName:find("work") then
-                print(string.format("  -> Găsit GUI: '%s' (Visible: %s)", gui.Name, tostring(gui.Enabled or true)))
-                for _, el in ipairs(gui:GetDescendants()) do
-                    if el:IsA("GuiButton") or el:IsA("TextLabel") then
-                        print(string.format("     -> Element: '%s' (%s) Text: '%s'", el.Name, el.ClassName, el:IsA("TextLabel") and el.Text or (el:IsA("TextButton") and el.Text or "")))
-                    end
-                end
-            end
-        end
-    end
-    print("----------------------------------------------------------")
-end
-
--- Helper to verify if a GUI element is rendered and visible on screen
-local function isGuiElementOnScreen(obj)
-    if not obj or not obj.Parent then return false end
-    if not obj.Visible then return false end
-    if obj.AbsoluteSize.X < 2 or obj.AbsoluteSize.Y < 2 then return false end
-
-    local sg = obj:FindFirstAncestorOfClass("ScreenGui")
-    if sg and not sg.Enabled then return false end
-
-    local p = obj.Parent
-    while p and p:IsA("GuiObject") do
-        if not p.Visible then return false end
-        p = p.Parent
-    end
-
-    return true
-end
-
--- Hardware + Virtual + firesignal Multi-Engine Clicker
-local function clickGuiButton(btn, optionalPos)
-    local absPos = optionalPos or (btn and (btn.AbsolutePosition + (btn.AbsoluteSize / 2))) or Vector2.new(960, 540)
-    local x = math.floor(absPos.X)
-    local y = math.floor(absPos.Y)
-
-    -- 1. VirtualInputManager (Movere mouse pe buton ÎNAINTE de click!)
-    pcall(function()
-        local vim = game:GetService("VirtualInputManager")
-        vim:SendMouseMoveEvent(x, y, game)
-        task.wait(0.03)
-        vim:SendMouseButtonEvent(x, y, 0, true, game, 0)
-        task.wait(0.04)
-        vim:SendMouseButtonEvent(x, y, 0, false, game, 0)
-    end)
-
-    -- 2. firesignal (Direct executor signal firing)
-    if btn then
-        pcall(function()
-            if firesignal then
-                firesignal(btn.MouseButton1Down)
-                firesignal(btn.MouseButton1Click)
-                firesignal(btn.MouseButton1Up)
-                firesignal(btn.Activated)
-            end
-        end)
-    end
-
-    -- 3. VirtualUser fallback
-    pcall(function()
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton1(Vector2.new(x, y))
-    end)
-end
-
--- Helper to identify styling arrows (Left/Right/< />/color)
-local function isArrowButton(btn)
-    if not btn then return false end
-    local n = btn.Name:lower()
-    local t = ""
-    if btn:IsA("TextButton") then t = btn.Text:lower() end
-    for _, child in ipairs(btn:GetChildren()) do
-        if child:IsA("TextLabel") and child.Text then t = t .. " " .. child.Text:lower() end
-    end
-    
-    if n:find("arrow") or n:find("left") or n:find("right") or n:find("prev") or n:find("next") or n:find("back") then
-        return true
-    end
-    if t:find("<") or t:find(">") or t:find("←") or t:find("→") or t:find("prev") or t:find("next") or t:find("left") or t:find("right") then
-        return true
-    end
-    if (n:find("color") or t:find("color")) and not (n:find("done") or n:find("finish") or n:find("confirm") or n:find("submit")) then
-        return true
-    end
-    return false
-end
-
--- Find active Done Button on screen
-local function findActiveDoneButton()
-    if State.CapturedDoneButton and isGuiElementOnScreen(State.CapturedDoneButton) then
-        return State.CapturedDoneButton
-    end
-
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pg then return nil end
-
-    for _, desc in ipairs(pg:GetDescendants()) do
-        if desc:IsA("GuiButton") and isGuiElementOnScreen(desc) then
-            local bName = desc.Name:lower()
-            local bText = (desc:IsA("TextButton") and desc.Text:lower()) or ""
-            for _, child in ipairs(desc:GetChildren()) do
-                if child:IsA("TextLabel") and child.Text then bText = bText .. " " .. child.Text:lower() end
-            end
-            if not isArrowButton(desc) then
-                if bName:find("done") or bText:find("done") or
-                   bName:find("finish") or bText:find("finish") or
-                   bName:find("gata") or bText:find("gata") or
-                   bName:find("confirm") or bText:find("confirm") or
-                   bName:find("submit") or bText:find("submit") or
-                   bName:find("cut") or bText:find("cut") or
-                   bName:find("action") or bName:find("order") then
-                    State.CapturedDoneButton = desc
-                    State.IsHairLearned = true
-                    return desc
-                end
-            end
+    if bestStation then
+        local stPart = bestStation.PrimaryPart or bestStation:FindFirstChild("Chair") or bestStation:FindFirstChild("Seat") or bestStation:FindFirstChildWhichIsA("BasePart")
+        if stPart then
+            State.CurrentHairWorkstation = bestStation
+            local behindOffset = (stPart.CFrame.LookVector * -2.4) + Vector3.new(0, 1.2, 0)
+            hrp.CFrame = CFrame.new(stPart.Position + behindOffset, stPart.Position)
+            hairDebugLog("STYLEZ", string.format("Teleportat la postul de lucru: '%s'! 💇", bestStation.Name), Color3.fromRGB(100, 255, 150))
+            return bestStation
         end
     end
 
+    -- Fallback: Search for StylezHairStudio model
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj.Name:lower():find("stylezhair") or obj.Name == "StylezHairStudio" then
+            hrp.CFrame = obj:GetPivot() + Vector3.new(0, 3.5, 0)
+            hairDebugLog("STYLEZ", "Teleportat la salonul Stylez Hair Studio! 💇", Color3.fromRGB(100, 255, 150))
+            return nil
+        end
+    end
+
+    hrp.CFrame = CFrame.new(-115, 14, -110)
+    hairDebugLog("STYLEZ", "Teleportat în zona Stylez Hair Studio (Centru)! 💇", Color3.fromRGB(100, 255, 150))
     return nil
 end
 
--- Interactive Manual 1-Cut Auto-Learning Listener
-local hairInputConn = nil
-local hairButtonConnections = {}
+-- Ignored customers map to prevent double-servicing
+local ignoredCustomers = {}
 
-startHairLearning = function()
-    State.HairLearningMode = true
-    State.IsHairLearned = false
-    Config.AutoHairdresser = true
-    State.CapturedDoneButton = nil
-    State.LearnedClickPos = nil
-    State.LastHairServiceTime = tick()
-
-    hairDebugLog("ÎNVĂȚARE", "👉 Tunde 1 client și apasă DONE! Click-ul de finalizare va fi capturat automat.", Color3.fromRGB(255, 200, 100))
-
-    if hairInputConn then pcall(function() hairInputConn:Disconnect() end) hairInputConn = nil end
-    for _, conn in ipairs(hairButtonConnections) do pcall(function() conn:Disconnect() end) end
-    hairButtonConnections = {}
-
-    local function onDoneCaptured(btn, clickPos)
-        State.CapturedDoneButton = btn
-        State.LearnedClickPos = clickPos
-        State.IsHairLearned = true
-        State.HairLearningMode = false
-
-        local btnName = btn and btn.Name or "Coordonată Ecran"
-        hairDebugLog("SINCRONIZAT", string.format("🎉 DONE CAPTURAT! (%s la %d, %d). Preiau AUTO... ✂️", btnName, math.floor(clickPos.X), math.floor(clickPos.Y)), Color3.fromRGB(100, 255, 150))
-
-        if hairInputConn then pcall(function() hairInputConn:Disconnect() end) hairInputConn = nil end
-        for _, conn in ipairs(hairButtonConnections) do pcall(function() conn:Disconnect() end) end
-        hairButtonConnections = {}
-    end
-
-    -- 1. Global Screen Click Listener (Capturează orice click cu mouse-ul)
-    hairInputConn = UserInputService.InputBegan:Connect(function(input, processed)
-        if not State.HairLearningMode then return end
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            local mPos = UserInputService:GetMouseLocation()
-            local pg = LocalPlayer:FindFirstChild("PlayerGui")
-            local hitBtn = nil
-
-            if pg then
-                local objects = pg:GetGuiObjectsAtPosition(mPos.X, mPos.Y)
-                for _, obj in ipairs(objects) do
-                    local candidate = (obj:IsA("GuiButton") and obj) or obj:FindFirstAncestorWhichIsA("GuiButton")
-                    if candidate then
-                        hitBtn = candidate
-                        break
-                    end
-                end
-            end
-
-            if hitBtn and isArrowButton(hitBtn) then
-                hairDebugLog("CLICK", string.format("Ajustat stil: '%s' (Săgeată). Apasă pe Done când ești gata!", hitBtn.Name), Color3.fromRGB(200, 220, 255))
-            else
-                -- Orice alt click (pe buton de confirmare sau direct pe ecran la Done)
-                onDoneCaptured(hitBtn, mPos)
-            end
-        end
-    end)
-
-    -- 2. Direct GuiButton Listeners în PlayerGui
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if pg then
-        local function hookBtn(btn)
-            if not btn:IsA("GuiButton") then return end
-
-            local function onTrigger()
-                if State.HairLearningMode then
-                    local pos = btn.AbsolutePosition + (btn.AbsoluteSize / 2)
-                    if isArrowButton(btn) then
-                        hairDebugLog("CLICK", string.format("Ajustat stil: '%s' (Săgeată)", btn.Name), Color3.fromRGB(200, 220, 255))
-                    else
-                        -- Orice alt buton este DONE!
-                        onDoneCaptured(btn, pos)
-                    end
-                end
-            end
-
-            local c1 = btn.MouseButton1Click:Connect(onTrigger)
-            local c2 = btn.Activated:Connect(onTrigger)
-            table.insert(hairButtonConnections, c1)
-            table.insert(hairButtonConnections, c2)
-        end
-
-        for _, desc in ipairs(pg:GetDescendants()) do
-            hookBtn(desc)
-        end
-
-        local cAdd = pg.DescendantAdded:Connect(function(desc)
-            if desc:IsA("GuiButton") then
-                hookBtn(desc)
-            end
-        end)
-        table.insert(hairButtonConnections, cAdd)
-    end
-end
-
--- Comprehensive Diagnostic Scanner for Mirror GUI in F9 Console
-scanMirrorGuiNow = function()
-    pcall(function()
-        local StarterGui = game:GetService("StarterGui")
-        StarterGui:SetCore("DevConsoleVisible", true)
-    end)
-    hairDebugLog("SCAN GUI", "Scanare completă a ecranului în consolă F9...", Color3.fromRGB(100, 200, 255))
-    print("================== [HAIRDRESSER DIAGNOSTIC SCAN] ==================")
-    print(string.format("[STATUS] IsHairLearned: %s | LearningMode: %s | Total Servit: %d",
-        tostring(State.IsHairLearned), tostring(State.HairLearningMode), State.HairServedCount or 0))
-    if State.CapturedDoneButton then
-        print(string.format("[STATUS] CapturedDoneButton: '%s' (Pe ecran: %s)", State.CapturedDoneButton:GetFullName(), tostring(isGuiElementOnScreen(State.CapturedDoneButton))))
-    else
-        print("[STATUS] CapturedDoneButton: nil")
-    end
-    if State.LearnedClickPos then
-        print(string.format("[STATUS] LearnedClickPos: (%d, %d)", math.floor(State.LearnedClickPos.X), math.floor(State.LearnedClickPos.Y)))
-    else
-        print("[STATUS] LearnedClickPos: nil")
-    end
-    if State.CapturedHairRemote then
-        print(string.format("[STATUS] CapturedHairRemote: '%s'", State.CapturedHairRemote:GetFullName()))
-    else
-        print("[STATUS] CapturedHairRemote: nil")
-    end
-
-    local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pg then
-        print("[HAIR GUI] PlayerGui nu este accesibil!")
-        return
-    end
-
-    print("\n--- SCREEN GUIS ---")
-    for _, g in ipairs(pg:GetChildren()) do
-        if g:IsA("ScreenGui") then
-            print(string.format("  -> ScreenGui: '%s' (Enabled: %s, DisplayOrder: %d)", g.Name, tostring(g.Enabled), g.DisplayOrder))
-        end
-    end
-
-    print("\n--- BUTOANE ȘI TEXTE VIZIBILE PE ECRAN ---")
-    local foundCount = 0
-    for _, obj in ipairs(pg:GetDescendants()) do
-        if (obj:IsA("GuiButton") or obj:IsA("TextLabel") or obj:IsA("ImageLabel")) and isGuiElementOnScreen(obj) then
-            foundCount = foundCount + 1
-            local textVal = (obj:IsA("TextLabel") and obj.Text) or (obj:IsA("TextButton") and obj.Text) or ""
-            local pos = obj.AbsolutePosition
-            local sz = obj.AbsoluteSize
-            print(string.format("  [%s] '%s' | Părinte: '%s' | Pos: (%d, %d) | Size: (%d, %d) | Text: '%s'",
-                obj.ClassName, obj.Name, obj.Parent and obj.Parent.Name or "nil", pos.X, pos.Y, sz.X, sz.Y, textVal))
-        end
-    end
-    print(string.format("[HAIR GUI] Total elemente GUI vizibile pe ecran: %d", foundCount))
-
-    print("\n--- REMOTE-URI REPLICATEDSTORAGE (JOB / WORK / HAIR) ---")
-    pcall(function()
-        local rep = game:GetService("ReplicatedStorage")
-        for _, r in ipairs(rep:GetDescendants()) do
-            if r:IsA("RemoteEvent") or r:IsA("RemoteFunction") then
-                local rn = r.Name:lower()
-                if rn:find("hair") or rn:find("stylez") or rn:find("job") or rn:find("work") or rn:find("station") or rn:find("order") then
-                    print(string.format("  -> Remote: '%s' (%s) | Cale: %s", r.Name, r.ClassName, r:GetFullName()))
-                end
-            end
-        end
-    end)
-    print("====================================================================")
-end
-
--- Core Auto Hairdresser Step Function (Smart 1-Cut Learning & Auto-Repeat)
+-- Core Auto Hairdresser Step Function (100% Autonomous Server Order Fulfiller)
 runHairdresserStep = function()
     local char = LocalPlayer.Character
     if not char then return end
@@ -2698,58 +2548,115 @@ runHairdresserStep = function()
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not humanoid or not hrp or humanoid.Health <= 0 then return end
 
-    -- 1. Modul de învățare activ: așteaptă ca utilizatorul să facă 1 cut manual
-    if State.HairLearningMode and not State.IsHairLearned then
+    -- 1. Asigură jobul StylezHairdresser
+    ensureHairJob()
+
+    -- 2. Găsește sau actualizează postul curent de lucru
+    local station = State.CurrentHairWorkstation
+    if not station or not station.Parent then
+        local st, dist = getNearestHairWorkstation()
+        if st and dist < 12 then
+            station = st
+            State.CurrentHairWorkstation = st
+        else
+            station = teleportToStylez()
+            if station then
+                State.CurrentHairWorkstation = station
+                task.wait(0.5)
+            end
+        end
+    end
+
+    if not station then
         if tick() - (State.LastHairLogTime or 0) > 4 then
             State.LastHairLogTime = tick()
-            hairDebugLog("MOD ÎNVĂȚARE", "👉 Tunde manual 1 client și apasă DONE pe ecran!", Color3.fromRGB(255, 200, 100))
+            hairDebugLog("CĂUTARE", "Caut un post de lucru liber la Stylez Hair Studio... 💈", Color3.fromRGB(200, 200, 220))
         end
         return
     end
 
-    -- 2. Cooldown între clienți (Bloxburg are tranziție de 2.0 - 3.0 secunde între clienți când unul pleacă și altul vine)
-    local timeSinceLast = tick() - (State.LastHairServiceTime or 0)
-    local minDelay = math.clamp(Config.HairdresserDelay or 2.5, 1.5, 5.0)
-    if timeSinceLast < minDelay then
-        return
+    local stPart = station.PrimaryPart or station:FindFirstChild("Chair") or station:FindFirstChild("Seat") or station:FindFirstChildWhichIsA("BasePart")
+    if not stPart then return end
+
+    -- Menține poziția optimă lângă post (la mai puțin de 6 studs)
+    local playerDistToStation = (hrp.Position - stPart.Position).Magnitude
+    if playerDistToStation > 6.5 then
+        local behindOffset = (stPart.CFrame.LookVector * -2.4) + Vector3.new(0, 1.2, 0)
+        hrp.CFrame = CFrame.new(stPart.Position + behindOffset, stPart.Position)
+        task.wait(0.15)
     end
 
-    -- 3. Caută butonul Done sau poziția ecran capturată
-    local doneBtn = findActiveDoneButton()
-    local clickPos = State.LearnedClickPos
+    -- 3. Caută clientul sosit la acest post de lucru
+    local customer, custDist = getCustomerForStation(station)
 
-    if doneBtn or clickPos then
-        hairDebugLog("CLIENT", "Client la oglindă! Finalizez comanda cu Done... ✂️", Color3.fromRGB(100, 200, 255))
+    if customer and customer.Parent and not ignoredCustomers[customer] then
+        local cHum = customer:FindFirstChildOfClass("Humanoid")
+        local order = customer:FindFirstChild("Order")
 
-        -- Apasă butonul Done pe ecran cu triplu motor de click
-        clickGuiButton(doneBtn, clickPos)
+        -- Verifică dacă clientul s-a așezat la oglindă
+        local isSeated = (cHum and (cHum.FloorMaterial == Enum.Material.Air or cHum.Sit)) or (custDist < 4.5)
 
-        -- Dacă avem Remote-ul capturat prin hookmetamethod, apelează-l și pe el
-        if State.CapturedHairRemote then
-            pcall(function()
-                if State.CapturedHairArgs then
-                    State.CapturedHairRemote:FireServer(table.unpack(State.CapturedHairArgs))
-                else
-                    State.CapturedHairRemote:FireServer()
-                end
-            end)
-        end
+        if order and isSeated then
+            local styleObj = order:FindFirstChild("Style")
+            local colorObj = order:FindFirstChild("Color")
 
-        State.LastHairServiceTime = tick()
-        State.HairServedCount = (State.HairServedCount or 0) + 1
-        hairDebugLog("SUCCES", string.format("🎉 Client servit cu succes! (Total clienți: %d)", State.HairServedCount), Color3.fromRGB(100, 255, 150))
+            local styleVal = styleObj and styleObj.Value
+            local colorVal = colorObj and colorObj.Value
 
-        task.wait(minDelay)
-        return
-    end
+            -- Dacă comanda are valorile încărcate
+            if styleVal ~= nil and colorVal ~= nil then
+                ignoredCustomers[customer] = true
 
-    -- 4. Dacă nu avem nici buton nici poziție capturată:
-    if tick() - (State.LastHairLogTime or 0) > 4 then
-        State.LastHairLogTime = tick()
-        if State.IsHairLearned then
-            hairDebugLog("AȘTEPTARE", "Aștept ca următorul client să se așeze pe scaun... ⏳", Color3.fromRGB(200, 200, 220))
+                -- Cleanup hook când clientul pleacă / dispare din joc
+                pcall(function()
+                    customer.AncestryChanged:Connect(function(_, parent)
+                        if not parent then
+                            ignoredCustomers[customer] = nil
+                        end
+                    end)
+                end)
+
+                hairDebugLog("CLIENT", string.format("👤 Client la scaun! Cere: Stil #%s, Culoare #%s ✂️", tostring(styleVal), tostring(colorVal)), Color3.fromRGB(100, 200, 255))
+
+                -- Delay de siguranță configurabil (0.2s - 2.5s)
+                local delayTime = math.clamp(Config.HairdresserDelay or 0.8, 0.2, 3.0)
+                task.wait(delayTime)
+
+                -- TRIMITE FINALIZAREA COMENZII PE SERVER
+                local payload = {
+                    Type = "JobCompleted",
+                    Workstation = station,
+                    Order = { styleVal, colorVal }
+                }
+
+                fireBloxburgRemote("JobCompleted", payload)
+
+                State.HairServedCount = (State.HairServedCount or 0) + 1
+                State.HairEarnedEst = (State.HairEarnedEst or 0) + 75
+                State.LastHairServiceTime = tick()
+
+                hairDebugLog("SUCCES", string.format("🎉 Client servit automat! (Total clienți: %d) 💵", State.HairServedCount), Color3.fromRGB(100, 255, 150))
+
+                task.wait(0.6)
+                return
+            end
         else
-            hairDebugLog("AȘTEPTARE", "Așază-te la scaun (în First Person) și apasă '🎯 Sincronizează'!", Color3.fromRGB(255, 200, 100))
+            if tick() - (State.LastHairLogTime or 0) > 3 then
+                State.LastHairLogTime = tick()
+                hairDebugLog("CLIENT", "👤 Clientul se așază pe scaun... finalizez imediat! ⏳", Color3.fromRGB(255, 200, 100))
+            end
+        end
+    else
+        -- Curăță clienții vechi care au părăsit jocul
+        for c, _ in pairs(ignoredCustomers) do
+            if not c or not c.Parent then
+                ignoredCustomers[c] = nil
+            end
+        end
+
+        if tick() - (State.LastHairLogTime or 0) > 4 then
+            State.LastHairLogTime = tick()
+            hairDebugLog("AȘTEPTARE", string.format("💈 Post de lucru pregătit (%s). Aștept următorul client...", station.Name), Color3.fromRGB(200, 220, 255))
         end
     end
 end
@@ -2758,7 +2665,7 @@ end
 local isRunningHairStep = false
 table.insert(State.Connections, task.spawn(function()
     while true do
-        task.wait(Config.HairdresserDelay or 0.8)
+        task.wait(0.2)
         if Config.AutoHairdresser and getgenv().PullZBloxburgLoaded and not isRunningHairStep then
             isRunningHairStep = true
             local ok, err = pcall(runHairdresserStep)
