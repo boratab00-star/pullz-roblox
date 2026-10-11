@@ -31,7 +31,7 @@
     - ⚙️ SETTINGS:
         * Live FPS & Network Ping HUD Pill
         * Window Minimize & Collapse Mode
-        * Keybind Toggle (Default: RightShift or Insert)
+        * Keybind Toggle (Default: Insert or on-screen button)
         * Instant Clean Hub Self-Destruct / Unload
     =========================================================================
 --]]
@@ -1116,7 +1116,7 @@ local diagText = Instance.new("TextLabel")
 diagText.Size = UDim2.new(1, -24, 1, 0)
 diagText.Position = UDim2.new(0, 12, 0, 0)
 diagText.BackgroundTransparency = 1
-diagText.Text = "Status: ACTIVE | Menu Toggle: [RightShift] or [Insert]"
+diagText.Text = "Status: ACTIVE | Menu Toggle: [Insert] or Minimized Pill"
 diagText.TextColor3 = Color3.fromRGB(100, 150, 255)
 diagText.Font = Enum.Font.GothamMedium
 diagText.TextSize = 11
@@ -1191,36 +1191,144 @@ local function getActiveDeliveryCustomer()
     return nil
 end
 
+local function findNearestMoped()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil end
+
+    local closestSeat = nil
+    local closestDist = math.huge
+    local shelfPos = Vector3.new(1172, 14, 258)
+    local parkingPos = Vector3.new(1148, 14, 265)
+
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("VehicleSeat") then
+            local model = obj:FindFirstAncestorOfClass("Model")
+            local n = model and model.Name:lower() or obj.Name:lower()
+            local dToShelf = (obj.Position - shelfPos).Magnitude
+            local dToPark = (obj.Position - parkingPos).Magnitude
+            local dToHrp = (obj.Position - hrp.Position).Magnitude
+
+            local isFree = (obj.Occupant == nil or (char:FindFirstChildOfClass("Humanoid") and obj.Occupant == char:FindFirstChildOfClass("Humanoid")))
+            if isFree then
+                if n:find("moped") or n:find("scooter") or n:find("pizza") or n:find("delivery") or dToShelf < 260 or dToPark < 260 then
+                    if dToHrp < closestDist then
+                        closestDist = dToHrp
+                        closestSeat = obj
+                    end
+                end
+            end
+        end
+    end
+
+    -- Fallback: Any unoccupied VehicleSeat near the player
+    if not closestSeat then
+        for _, obj in pairs(Workspace:GetDescendants()) do
+            if obj:IsA("VehicleSeat") and obj.Occupant == nil then
+                local d = (obj.Position - hrp.Position).Magnitude
+                if d < 120 then
+                    closestSeat = obj
+                    break
+                end
+            end
+        end
+    end
+
+    return closestSeat
+end
+
+local function hasPizzaBox()
+    local char = LocalPlayer.Character
+    if not char then return false, nil end
+
+    -- Check character tools
+    for _, item in pairs(char:GetChildren()) do
+        if item:IsA("Tool") then
+            return true, item
+        end
+    end
+
+    -- Check backpack tools
+    local bp = LocalPlayer:FindFirstChild("Backpack")
+    if bp then
+        for _, item in pairs(bp:GetChildren()) do
+            if item:IsA("Tool") then
+                return true, item
+            end
+        end
+    end
+
+    -- Check welded objects / models in character
+    for _, item in pairs(char:GetChildren()) do
+        local n = item.Name:lower()
+        if (n:find("pizza") or n:find("box")) and (item:IsA("Model") or item:IsA("BasePart") or item:IsA("Accessory")) then
+            return true, item
+        end
+    end
+
+    -- Check if active customer arrow is present
+    if getActiveDeliveryCustomer() ~= nil then
+        return true, nil
+    end
+
+    return false, nil
+end
+
 local function smoothGlideTo(targetPos, speed)
     local character = LocalPlayer.Character
     if not character then return end
-    local hrp = character:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    local rootPart = nil
+    local isVehicle = false
 
-    speed = speed or 65
-    local currentPos = hrp.Position
+    if humanoid and humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
+        local seat = humanoid.SeatPart
+        local mopedModel = seat:FindFirstAncestorOfClass("Model")
+        rootPart = (mopedModel and mopedModel.PrimaryPart) or seat
+        isVehicle = true
+    else
+        rootPart = character:FindFirstChild("HumanoidRootPart")
+    end
+
+    if not rootPart then return end
+
+    speed = speed or (isVehicle and (Config.MopedSpeed or 95) or Config.DeliverySpeed or 65)
+    local currentPos = rootPart.Position
     local dist = (targetPos - currentPos).Magnitude
-    local duration = math.clamp(dist / speed, 0.2, 8)
+    if dist < 2.5 then return end
 
-    local bodyVel = hrp:FindFirstChild("PullZ_GlideVel")
+    local duration = math.clamp(dist / speed, 0.2, 10)
+
+    local bodyVel = rootPart:FindFirstChild("PullZ_GlideVel")
     if not bodyVel then
         bodyVel = Instance.new("BodyVelocity")
         bodyVel.Name = "PullZ_GlideVel"
-        bodyVel.MaxForce = Vector3.new(1e5, 1e5, 1e5)
-        bodyVel.Parent = hrp
+        bodyVel.MaxForce = Vector3.new(1e7, 1e7, 1e7)
+        bodyVel.Parent = rootPart
     end
 
     local startTime = tick()
     while tick() - startTime < duration and Config.AutoDelivery and character and character.Parent do
         local alpha = math.clamp((tick() - startTime) / duration, 0, 1)
         local nextPos = currentPos:Lerp(targetPos, alpha)
-        hrp.CFrame = CFrame.new(nextPos)
-        bodyVel.Velocity = (targetPos - hrp.Position).Unit * speed
+
+        local lookTarget = Vector3.new(targetPos.X, nextPos.Y, targetPos.Z)
+        if (lookTarget - nextPos).Magnitude > 0.1 then
+            rootPart.CFrame = CFrame.new(nextPos, lookTarget)
+        else
+            rootPart.CFrame = CFrame.new(nextPos)
+        end
+
+        local dir = (targetPos - rootPart.Position)
+        if dir.Magnitude > 0 then
+            bodyVel.Velocity = dir.Unit * speed
+        end
         RunService.Heartbeat:Wait()
     end
 
-    if bodyVel then bodyVel:Destroy() end
-    hrp.CFrame = CFrame.new(targetPos)
+    if bodyVel then pcall(function() bodyVel:Destroy() end) end
+    rootPart.CFrame = CFrame.new(targetPos)
 end
 
 local function interactWithObject(target)
@@ -1241,6 +1349,49 @@ local function interactWithObject(target)
     end)
 end
 
+local function mountMoped(mopedSeat)
+    local char = LocalPlayer.Character
+    if not char then return false end
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not humanoid or not hrp or not mopedSeat then return false end
+
+    if humanoid.SeatPart == mopedSeat then
+        return true
+    end
+
+    -- Walk/glide directly to moped seat
+    smoothGlideTo(mopedSeat.Position + Vector3.new(0, 2, 0), Config.DeliverySpeed)
+    task.wait(0.15)
+
+    -- Teleport above seat and sit
+    hrp.CFrame = mopedSeat.CFrame + Vector3.new(0, 0.5, 0)
+    task.wait(0.1)
+    pcall(function()
+        mopedSeat:Sit(humanoid)
+    end)
+    task.wait(0.25)
+
+    -- If not seated, interact with vehicle model prompts
+    if not humanoid.SeatPart then
+        local model = mopedSeat:FindFirstAncestorOfClass("Model")
+        interactWithObject(model or mopedSeat)
+        task.wait(0.2)
+    end
+
+    -- Touch interest backup
+    if not humanoid.SeatPart and firetouchinterest then
+        pcall(function()
+            firetouchinterest(hrp, mopedSeat, 0)
+            task.wait(0.05)
+            firetouchinterest(hrp, mopedSeat, 1)
+        end)
+        task.wait(0.2)
+    end
+
+    return humanoid.SeatPart ~= nil
+end
+
 local function runPizzaDeliveryStep()
     local character = LocalPlayer.Character
     if not character then return end
@@ -1248,38 +1399,76 @@ local function runPizzaDeliveryStep()
     local hrp = character:FindFirstChild("HumanoidRootPart")
     if not humanoid or not hrp or humanoid.Health <= 0 then return end
 
-    local pizzaTool = character:FindFirstChild("Pizza") or character:FindFirstChildWhichIsA("Tool")
-    if not pizzaTool and LocalPlayer:FindFirstChild("Backpack") then
-        pizzaTool = LocalPlayer.Backpack:FindFirstChild("Pizza") or LocalPlayer.Backpack:FindFirstChildWhichIsA("Tool")
-        if pizzaTool then
-            humanoid:EquipTool(pizzaTool)
-            task.wait(0.2)
-        end
-    end
+    local hasPizza, pizzaTool = hasPizzaBox()
+    local shelfPos = getPizzaShelfPosition()
+    local parkingPos = Vector3.new(1148, 14, 265)
 
-    if not pizzaTool then
-        local shelfPos = getPizzaShelfPosition()
-        smoothGlideTo(shelfPos + Vector3.new(0, 3, 0), Config.DeliverySpeed)
-        task.wait(0.3)
+    -- STAGE 1: We do not have pizza -> Go to Pizza Planet, dismount moped, take box
+    if not hasPizza then
+        -- If currently riding moped, drive to the parking lot in front of Pizza Planet
+        if humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
+            smoothGlideTo(parkingPos + Vector3.new(0, 1.5, 0), Config.MopedSpeed or 95)
+            task.wait(0.2)
+            -- Hop off moped so it stays parked outside
+            humanoid.Jump = true
+            task.wait(0.35)
+        end
+
+        -- Walk/glide inside Pizza Planet to shelf
+        smoothGlideTo(shelfPos + Vector3.new(0, 2.5, 0), Config.DeliverySpeed)
+        task.wait(0.2)
+
+        -- Interact with shelf to take pizza box
         pcall(function()
-            for _, part in pairs(Workspace:GetPartBoundsInRadius(shelfPos, 10)) do
+            for _, part in pairs(Workspace:GetPartBoundsInRadius(shelfPos, 15)) do
                 interactWithObject(part)
+                if part.Parent then
+                    interactWithObject(part.Parent)
+                end
+            end
+            for _, prompt in pairs(Workspace:GetDescendants()) do
+                if prompt:IsA("ProximityPrompt") then
+                    if (prompt.Parent:GetPivot().Position - shelfPos).Magnitude < 15 then
+                        if fireproximityprompt then
+                            fireproximityprompt(prompt)
+                        end
+                    end
+                end
             end
         end)
         task.wait(Config.WorkDelay or 0.6)
+
+    -- STAGE 2: We have pizza -> Go out to moped, mount it, and ride to customer!
     else
+        -- Equip pizza if in backpack
+        if pizzaTool and pizzaTool.Parent == LocalPlayer:FindFirstChild("Backpack") then
+            humanoid:EquipTool(pizzaTool)
+            task.wait(0.15)
+        end
+
+        -- Check if mounted on moped; if not, go to moped and climb onto it
+        local isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
+        if not isMounted then
+            local mopedSeat = findNearestMoped()
+            if mopedSeat then
+                mountMoped(mopedSeat)
+                task.wait(0.3)
+            end
+        end
+
+        -- Ride moped to active customer
         local customer = getActiveDeliveryCustomer()
         if customer then
             local custHrp = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head") or customer.PrimaryPart
             if custHrp then
-                local deliverPos = custHrp.Position + Vector3.new(0, 2, 2)
+                local deliverPos = custHrp.Position + (custHrp.CFrame.LookVector * 3.5) + Vector3.new(0, 1.5, 0)
                 smoothGlideTo(deliverPos, Config.DeliverySpeed)
                 task.wait(0.3)
                 interactWithObject(customer)
                 task.wait(Config.WorkDelay or 0.6)
             end
         else
-            task.wait(0.8)
+            task.wait(0.6)
         end
     end
 end
@@ -1422,9 +1611,9 @@ table.insert(State.Connections, LocalPlayer.Idled:Connect(function()
     VirtualUser:ClickButton2(Vector2.new(0, 0))
 end))
 
--- Menu Toggle Keybind ([RightShift] or [Insert])
+-- Menu Toggle Keybind ([Insert] Only, Shift Removed)
 table.insert(State.Connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if not gameProcessed and (input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.Insert) then
+    if not gameProcessed and input.KeyCode == Enum.KeyCode.Insert then
         BorderFrame.Visible = not BorderFrame.Visible
         if MinimizedBtn.Visible then
             MinimizedBtn.Visible = false
