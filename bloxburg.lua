@@ -1,17 +1,19 @@
 --[[
     =========================================================================
-    BLOXBURG STYLEZ HAIRDRESSER - ULTRA CLEAN & DEDICATED
+    BLOXBURG STYLEZ HAIRDRESSER - BULLETPROOF CONTINUOUS AUTO-FARM
     =========================================================================
-    - 100% Doar pentru Stylez Hair Studio
-    - Detectează automat ORICE scaun la care te așezi (dinamic, fără blocare)
-    - Detectează fiecare client care vine la scaun și comanda cerută (Stil & Culoare)
-    - Poziționare laterală în First Person (nu obstrucționează vederea)
-    - Auto-Done multi-engine (GUI click + Network)
-    - UI modern, compact și simplu (sub 250 linii)
+    - Detectează continuu toți clienții (Client 1, Client 2, Client 3...)
+    - Filtru geometric 2D pe planul orizontal (XZ < 3.0 studs) pentru scaun
+    - Memorează postul curent (nu sare între scaune vecine din salon)
+    - Căutare butoane pe SurfaceGui (Oglindă salon) și PlayerGui
+    - Declanșare click triplă (firesignal + VirtualInputManager + VirtualUser)
+    - Învățare automată a poziției Done dacă dai click manual
+    - Poziționare laterală în First Person (nu stă în spatele scaunului)
+    - UI compact, modern și simplu (280x340 px)
     =========================================================================
 --]]
 
--- Curățare instanță precedentă
+-- Curățare instanță anterioară
 if getgenv().StylezHairLoaded then
     pcall(function()
         if getgenv().StylezHairUnload then getgenv().StylezHairUnload() end
@@ -19,7 +21,7 @@ if getgenv().StylezHairLoaded then
 end
 getgenv().StylezHairLoaded = true
 
--- Servicii
+-- Servicii Roblox
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
@@ -34,22 +36,22 @@ local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
     repeat task.wait(0.05) LocalPlayer = Players.LocalPlayer until LocalPlayer
 end
-local Camera = Workspace.CurrentCamera or Workspace:WaitForChild("Camera", 5)
 
--- Configurare & Stare (Activ automat la pornire!)
+-- Configurare & Stare (ACTIV din prima secundă)
 local Config = {
     Active = true,
-    Delay = 0.8,
-    FirstPerson = true
+    Delay = 0.8
 }
 
 local State = {
     CurrentStation = nil,
     CurrentCustomer = nil,
-    CurrentStyle = nil,
-    CurrentColor = nil,
-    LastServedOrderKey = nil,
+    LastServedCustomerInstance = nil,
+    LastCustomerLeaving = false,
+    DoneClickPos = nil,
+    DoneButton = nil,
     TotalServed = 0,
+    TotalEarned = 0,
     Connections = {},
     ScreenGui = nil,
     OriginalCameraMode = LocalPlayer.CameraMode
@@ -70,7 +72,7 @@ pcall(function()
 end)
 
 -- =========================================================================
--- INTERFAȚĂ GRAFICĂ SIMPLĂ ȘI ELEGANTĂ (COMPACT DARK THEME)
+-- INTERFAȚĂ GRAFICĂ COMPACTĂ ȘI MODERNĂ (280 x 340 px)
 -- =========================================================================
 
 local ScreenGui = Instance.new("ScreenGui")
@@ -103,11 +105,11 @@ if not attached then
 end
 State.ScreenGui = ScreenGui
 
--- Fereastră principală compactă (280 x 310 px)
+-- Fereastră principală compactă
 local Frame = Instance.new("Frame")
 Frame.Name = "MainFrame"
-Frame.Size = UDim2.new(0, 280, 0, 310)
-Frame.Position = UDim2.new(0.03, 0, 0.25, 0)
+Frame.Size = UDim2.new(0, 280, 0, 340)
+Frame.Position = UDim2.new(0.03, 0, 0.22, 0)
 Frame.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
 Frame.BorderSizePixel = 0
 Frame.ClipsDescendants = true
@@ -118,13 +120,13 @@ FrameCorner.CornerRadius = UDim.new(0, 8)
 FrameCorner.Parent = Frame
 
 local FrameStroke = Instance.new("UIStroke")
-FrameStroke.Color = Color3.fromRGB(40, 40, 55)
+FrameStroke.Color = Color3.fromRGB(45, 45, 60)
 FrameStroke.Thickness = 1
 FrameStroke.Parent = Frame
 
 -- Bară de titlu (Draggable)
 local TopBar = Instance.new("Frame")
-TopBar.Size = UDim2.new(1, 0, 0, 38)
+TopBar.Size = UDim2.new(1, 0, 0, 36)
 TopBar.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
 TopBar.BorderSizePixel = 0
 TopBar.Parent = Frame
@@ -137,7 +139,7 @@ local TitleText = Instance.new("TextLabel")
 TitleText.Size = UDim2.new(0, 160, 1, 0)
 TitleText.Position = UDim2.new(0, 10, 0, 0)
 TitleText.BackgroundTransparency = 1
-TitleText.Text = "✂️ Stylez Hairdresser"
+TitleText.Text = "✂️ Stylez Hair Studio"
 TitleText.TextColor3 = Color3.fromRGB(240, 240, 245)
 TitleText.Font = Enum.Font.GothamBold
 TitleText.TextSize = 12
@@ -204,14 +206,14 @@ end)
 
 -- Corpul Interfeței
 local Body = Instance.new("Frame")
-Body.Size = UDim2.new(1, -16, 1, -48)
-Body.Position = UDim2.new(0, 8, 0, 44)
+Body.Size = UDim2.new(1, -16, 1, -44)
+Body.Position = UDim2.new(0, 8, 0, 40)
 Body.BackgroundTransparency = 1
 Body.Parent = Frame
 
 -- Card de Info Live pentru Post & Client
 local InfoCard = Instance.new("Frame")
-InfoCard.Size = UDim2.new(1, 0, 0, 92)
+InfoCard.Size = UDim2.new(1, 0, 0, 94)
 InfoCard.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
 InfoCard.BorderSizePixel = 0
 InfoCard.Parent = Body
@@ -254,20 +256,21 @@ RowOrder.TextXAlignment = Enum.TextXAlignment.Left
 RowOrder.Parent = InfoCard
 
 local RowStatus = Instance.new("TextLabel")
-RowStatus.Size = UDim2.new(1, -12, 0, 20)
+RowStatus.Size = UDim2.new(1, -12, 0, 24)
 RowStatus.Position = UDim2.new(0, 8, 0, 66)
 RowStatus.BackgroundTransparency = 1
 RowStatus.Text = "⚡ Stare: Gata de lucru (Stai la un scaun)"
 RowStatus.TextColor3 = Color3.fromRGB(140, 240, 160)
 RowStatus.Font = Enum.Font.Gotham
 RowStatus.TextSize = 9
+RowStatus.TextWrapped = true
 RowStatus.TextXAlignment = Enum.TextXAlignment.Left
 RowStatus.Parent = InfoCard
 
 -- Buton Principal START / PAUZĂ
 local ToggleBtn = Instance.new("TextButton")
-ToggleBtn.Size = UDim2.new(1, 0, 0, 34)
-ToggleBtn.Position = UDim2.new(0, 0, 0, 98)
+ToggleBtn.Size = UDim2.new(1, 0, 0, 32)
+ToggleBtn.Position = UDim2.new(0, 0, 0, 100)
 ToggleBtn.BackgroundColor3 = Color3.fromRGB(35, 140, 75)
 ToggleBtn.Text = "🟢 ACTIVAT (Click pentru Pauză)"
 ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -280,10 +283,10 @@ local ToggleCorner = Instance.new("UICorner")
 ToggleCorner.CornerRadius = UDim.new(0, 6)
 ToggleCorner.Parent = ToggleBtn
 
--- Buton Poziționare Laterală la Scaun
+-- Butoane Acțiuni Rapide
 local AlignBtn = Instance.new("TextButton")
 AlignBtn.Size = UDim2.new(0.48, 0, 0, 28)
-AlignBtn.Position = UDim2.new(0, 0, 0, 138)
+AlignBtn.Position = UDim2.new(0, 0, 0, 136)
 AlignBtn.BackgroundColor3 = Color3.fromRGB(26, 26, 36)
 AlignBtn.Text = "📍 La Scaun (Lateral)"
 AlignBtn.TextColor3 = Color3.fromRGB(180, 210, 255)
@@ -296,12 +299,11 @@ local AlignCorner = Instance.new("UICorner")
 AlignCorner.CornerRadius = UDim.new(0, 6)
 AlignCorner.Parent = AlignBtn
 
--- Buton DONE Manual
 local DoneBtn = Instance.new("TextButton")
 DoneBtn.Size = UDim2.new(0.48, 0, 0, 28)
-DoneBtn.Position = UDim2.new(0.52, 0, 0, 138)
-DoneBtn.BackgroundColor3 = Color3.fromRGB(28, 42, 32)
-DoneBtn.Text = "✂️ Click DONE Manual"
+DoneBtn.Position = UDim2.new(0.52, 0, 0, 136)
+DoneBtn.BackgroundColor3 = Color3.fromRGB(28, 55, 36)
+DoneBtn.Text = "✂️ Click DONE Acum"
 DoneBtn.TextColor3 = Color3.fromRGB(130, 250, 170)
 DoneBtn.Font = Enum.Font.GothamBold
 DoneBtn.TextSize = 9
@@ -312,10 +314,77 @@ local DoneCorner = Instance.new("UICorner")
 DoneCorner.CornerRadius = UDim.new(0, 6)
 DoneCorner.Parent = DoneBtn
 
--- Slider Viteză
+-- Rând Butoane Săgeți pentru Schimbat Rapid Stil & Culoare
+local ArrowRow = Instance.new("Frame")
+ArrowRow.Size = UDim2.new(1, 0, 0, 28)
+ArrowRow.Position = UDim2.new(0, 0, 0, 168)
+ArrowRow.BackgroundTransparency = 1
+ArrowRow.Parent = Body
+
+local StylePrevBtn = Instance.new("TextButton")
+StylePrevBtn.Size = UDim2.new(0.23, 0, 1, 0)
+StylePrevBtn.Position = UDim2.new(0, 0, 0, 0)
+StylePrevBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+StylePrevBtn.Text = "◀ Stil"
+StylePrevBtn.TextColor3 = Color3.fromRGB(200, 220, 255)
+StylePrevBtn.Font = Enum.Font.GothamMedium
+StylePrevBtn.TextSize = 9
+StylePrevBtn.BorderSizePixel = 0
+StylePrevBtn.Parent = ArrowRow
+
+local SPCorner = Instance.new("UICorner")
+SPCorner.CornerRadius = UDim.new(0, 4)
+SPCorner.Parent = StylePrevBtn
+
+local StyleNextBtn = Instance.new("TextButton")
+StyleNextBtn.Size = UDim2.new(0.23, 0, 1, 0)
+StyleNextBtn.Position = UDim2.new(0.25, 0, 0, 0)
+StyleNextBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+StyleNextBtn.Text = "Stil ▶"
+StyleNextBtn.TextColor3 = Color3.fromRGB(200, 220, 255)
+StyleNextBtn.Font = Enum.Font.GothamMedium
+StyleNextBtn.TextSize = 9
+StyleNextBtn.BorderSizePixel = 0
+StyleNextBtn.Parent = ArrowRow
+
+local SNCorner = Instance.new("UICorner")
+SNCorner.CornerRadius = UDim.new(0, 4)
+SNCorner.Parent = StyleNextBtn
+
+local ColorPrevBtn = Instance.new("TextButton")
+ColorPrevBtn.Size = UDim2.new(0.23, 0, 1, 0)
+ColorPrevBtn.Position = UDim2.new(0.52, 0, 0, 0)
+ColorPrevBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+ColorPrevBtn.Text = "◀ Culoare"
+ColorPrevBtn.TextColor3 = Color3.fromRGB(255, 210, 170)
+ColorPrevBtn.Font = Enum.Font.GothamMedium
+ColorPrevBtn.TextSize = 8
+ColorPrevBtn.BorderSizePixel = 0
+ColorPrevBtn.Parent = ArrowRow
+
+local CPCorner = Instance.new("UICorner")
+CPCorner.CornerRadius = UDim.new(0, 4)
+CPCorner.Parent = ColorPrevBtn
+
+local ColorNextBtn = Instance.new("TextButton")
+ColorNextBtn.Size = UDim2.new(0.23, 0, 1, 0)
+ColorNextBtn.Position = UDim2.new(0.77, 0, 0, 0)
+ColorNextBtn.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+ColorNextBtn.Text = "Culoare ▶"
+ColorNextBtn.TextColor3 = Color3.fromRGB(255, 210, 170)
+ColorNextBtn.Font = Enum.Font.GothamMedium
+ColorNextBtn.TextSize = 8
+ColorNextBtn.BorderSizePixel = 0
+ColorNextBtn.Parent = ArrowRow
+
+local CNCorner = Instance.new("UICorner")
+CNCorner.CornerRadius = UDim.new(0, 4)
+CNCorner.Parent = ColorNextBtn
+
+-- Slider Viteză Servire
 local SliderBox = Instance.new("Frame")
-SliderBox.Size = UDim2.new(1, 0, 0, 40)
-SliderBox.Position = UDim2.new(0, 0, 0, 172)
+SliderBox.Size = UDim2.new(1, 0, 0, 36)
+SliderBox.Position = UDim2.new(0, 0, 0, 200)
 SliderBox.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
 SliderBox.BorderSizePixel = 0
 SliderBox.Parent = Body
@@ -326,9 +395,9 @@ SliderBoxCorner.Parent = SliderBox
 
 local SliderText = Instance.new("TextLabel")
 SliderText.Size = UDim2.new(0.7, 0, 0, 16)
-SliderText.Position = UDim2.new(0, 8, 0, 3)
+SliderText.Position = UDim2.new(0, 8, 0, 2)
 SliderText.BackgroundTransparency = 1
-SliderText.Text = "⏱️ Viteză Servire"
+SliderText.Text = "⏱️ Viteză Servire (Delay)"
 SliderText.TextColor3 = Color3.fromRGB(180, 180, 190)
 SliderText.Font = Enum.Font.GothamMedium
 SliderText.TextSize = 9
@@ -337,7 +406,7 @@ SliderText.Parent = SliderBox
 
 local SliderValText = Instance.new("TextLabel")
 SliderValText.Size = UDim2.new(0.25, 0, 0, 16)
-SliderValText.Position = UDim2.new(0.72, 0, 0, 3)
+SliderValText.Position = UDim2.new(0.72, 0, 0, 2)
 SliderValText.BackgroundTransparency = 1
 SliderValText.Text = "0.8s"
 SliderValText.TextColor3 = Color3.fromRGB(120, 220, 160)
@@ -348,7 +417,7 @@ SliderValText.Parent = SliderBox
 
 local SliderTrack = Instance.new("Frame")
 SliderTrack.Size = UDim2.new(1, -16, 0, 6)
-SliderTrack.Position = UDim2.new(0, 8, 0, 24)
+SliderTrack.Position = UDim2.new(0, 8, 0, 22)
 SliderTrack.BackgroundColor3 = Color3.fromRGB(36, 36, 48)
 SliderTrack.BorderSizePixel = 0
 SliderTrack.Parent = SliderBox
@@ -367,7 +436,7 @@ local SliderFillCorner = Instance.new("UICorner")
 SliderFillCorner.CornerRadius = UDim.new(1, 0)
 SliderFillCorner.Parent = SliderFill
 
--- Slider Drag Event
+-- Slider Drag
 local isDraggingSlider = false
 SliderTrack.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -394,8 +463,8 @@ end)
 
 -- Bară Statistici Jos
 local StatsPill = Instance.new("Frame")
-StatsPill.Size = UDim2.new(1, 0, 0, 30)
-StatsPill.Position = UDim2.new(0, 0, 0, 218)
+StatsPill.Size = UDim2.new(1, 0, 0, 26)
+StatsPill.Position = UDim2.new(0, 0, 0, 240)
 StatsPill.BackgroundColor3 = Color3.fromRGB(22, 22, 30)
 StatsPill.BorderSizePixel = 0
 StatsPill.Parent = Body
@@ -407,20 +476,18 @@ StatsPillCorner.Parent = StatsPill
 local StatsText = Instance.new("TextLabel")
 StatsText.Size = UDim2.new(1, 0, 1, 0)
 StatsText.BackgroundTransparency = 1
-StatsText.Text = "Total Serviți: 0   |   Bani: $0"
+StatsText.Text = "Total Serviți: 0   |   Bani Estimați: $0"
 StatsText.TextColor3 = Color3.fromRGB(160, 220, 180)
 StatsText.Font = Enum.Font.GothamMedium
 StatsText.TextSize = 9
 StatsText.Parent = StatsPill
 
 -- =========================================================================
--- MOTORUL DE SCANARE WORKSTATION ȘI CLIENȚI (DINAMIC PENTRU ORICE SCAUN)
+-- MOTOR DE SCANARE POST DE LUCRU CU PERSISTENȚĂ (HYSTERESIS)
 -- =========================================================================
 
--- Găsește toate posturile de lucru din joc
 local function getAllWorkstations()
     local list = {}
-    -- Cale directă Stylez Hair Studio
     pcall(function()
         local loc = Workspace:FindFirstChild("Environment")
         if loc then loc = loc:FindFirstChild("Locations") end
@@ -436,7 +503,6 @@ local function getAllWorkstations()
     end)
     if #list > 0 then return list end
 
-    -- Căutare după nume HairdresserWorkstations
     pcall(function()
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj.Name == "HairdresserWorkstations" then
@@ -450,7 +516,6 @@ local function getAllWorkstations()
     end)
     if #list > 0 then return list end
 
-    -- Căutare modele ce conțin Mirror sau Chair
     pcall(function()
         for _, obj in ipairs(Workspace:GetDescendants()) do
             if obj:IsA("Model") and (obj.Name:lower():find("hair") or obj.Name:lower():find("stylez")) then
@@ -464,13 +529,25 @@ local function getAllWorkstations()
     return list
 end
 
--- Detectează automat scaunul lângă care se află jucătorul în mod real!
-local function getNearestStationToPlayer()
+-- Returnează postul curent, menținându-l stabil (evită săritul la alte scaune)
+local function getMyStation()
     local char = LocalPlayer.Character
     if not char then return nil, math.huge end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil, math.huge end
 
+    -- 1. Verifică dacă postul actual este încă în rază (< 14 studs)
+    if State.CurrentStation and State.CurrentStation.Parent then
+        local stPart = State.CurrentStation:FindFirstChild("Chair") or State.CurrentStation:FindFirstChild("Seat") or State.CurrentStation.PrimaryPart or State.CurrentStation:FindFirstChildWhichIsA("BasePart")
+        if stPart then
+            local d = (stPart.Position - hrp.Position).Magnitude
+            if d < 14 then
+                return State.CurrentStation, d
+            end
+        end
+    end
+
+    -- 2. Căutare post cel mai apropiat
     local all = getAllWorkstations()
     local nearest, minDist = nil, math.huge
 
@@ -485,11 +562,16 @@ local function getNearestStationToPlayer()
         end
     end
 
-    return nearest, minDist
+    if nearest and minDist < 14 then
+        State.CurrentStation = nearest
+        return nearest, minDist
+    end
+
+    return nil, minDist
 end
 
--- Asigură pontarea la job dacă este nevoie
-local function ensureHairJob()
+-- Asigură pontarea la job
+local function ensureJobClockIn()
     pcall(function()
         local rep = game:GetService("ReplicatedStorage")
         local stats = rep:FindFirstChild("Stats")
@@ -508,11 +590,9 @@ local function ensureHairJob()
     end)
 end
 
--- Poziționare laterală în First Person (nu stă în spatele scaunului)
+-- Poziționare laterală în First Person
 local function alignToStation(station)
-    if not station then
-        station = getNearestStationToPlayer()
-    end
+    if not station then station = getMyStation() end
     if not station then return false end
 
     local char = LocalPlayer.Character
@@ -523,14 +603,13 @@ local function alignToStation(station)
     local chair = station:FindFirstChild("Chair") or station:FindFirstChild("Seat") or station.PrimaryPart or station:FindFirstChildWhichIsA("BasePart")
     if not chair then return false end
 
-    ensureHairJob()
+    ensureJobClockIn()
 
-    -- Poziționare în lateral (RightVector * 2.2) privind spre scaun/oglindă
+    -- Poziționare laterală (RightVector * 2.2) privind spre scaun/oglindă
     local sidePos = chair.Position + (chair.CFrame.RightVector * 2.2) + (chair.CFrame.LookVector * 0.3) + Vector3.new(0, 0.5, 0)
     local targetPos = chair.Position + Vector3.new(0, 1.2, 0)
     hrp.CFrame = CFrame.new(sidePos, targetPos)
 
-    -- Activare First Person
     pcall(function()
         LocalPlayer.CameraMode = Enum.CameraMode.LockFirstPerson
         LocalPlayer.CameraMinZoomDistance = 0.5
@@ -541,11 +620,47 @@ local function alignToStation(station)
 end
 
 -- =========================================================================
--- DETECȚIE CLIENT ȘI COMANDĂ (BULLETPROOF PENTRU ORICE SCAUN)
+-- DETECȚIE CLIENT STRICT PE PLANUL ORIZONTAL AL SCAUNULUI (XZ < 3.0 studs)
 -- =========================================================================
 
--- Caută clientul și comanda lui la scaunul selectat
-local function findCustomerAtStation(station)
+local function getAllPotentialCharacters(station)
+    local list = {}
+    local seen = {}
+
+    local function addModel(m)
+        if m and m:IsA("Model") and m ~= LocalPlayer.Character and not seen[m] then
+            seen[m] = true
+            table.insert(list, m)
+        end
+    end
+
+    -- 1. Verifică toate folderele SpawnedCharacters din Workspace
+    pcall(function()
+        for _, desc in ipairs(Workspace:GetDescendants()) do
+            if desc.Name == "SpawnedCharacters" or desc.Name == "Characters" or desc.Name == "NPCs" then
+                for _, child in ipairs(desc:GetChildren()) do
+                    addModel(child)
+                end
+            end
+        end
+    end)
+
+    -- 2. Copiii din stația de lucru
+    if station then
+        for _, child in ipairs(station:GetChildren()) do
+            addModel(child)
+        end
+    end
+
+    -- 3. Copiii direcți Workspace
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        addModel(obj)
+    end
+
+    return list
+end
+
+local function getCustomerInChair(station)
     if not station then return nil, nil, nil end
     local chair = station:FindFirstChild("Chair") or station:FindFirstChild("Seat") or station.PrimaryPart or station:FindFirstChildWhichIsA("BasePart")
     if not chair then return nil, nil, nil end
@@ -553,68 +668,42 @@ local function findCustomerAtStation(station)
     local bestCustomer = nil
     local bestStyle = nil
     local bestColor = nil
-    local minDistance = 6.5 -- În raza scaunului
+    local minHorizDist = 3.0 -- Limită orizontală strictă (exclude scaunele vecine la 7+ studs)
 
-    -- 1. Verificare folder _game.SpawnedCharacters
-    local searchList = {}
-    local gameFolder = Workspace:FindFirstChild("_game")
-    if gameFolder and gameFolder:FindFirstChild("SpawnedCharacters") then
-        for _, c in ipairs(gameFolder.SpawnedCharacters:GetChildren()) do
-            table.insert(searchList, c)
-        end
-    end
+    local chairPos = chair.Position
+    local candidates = getAllPotentialCharacters(station)
 
-    -- 2. Verificare alte modele din Workspace dacă lista e goală
-    if #searchList == 0 then
-        for _, obj in ipairs(Workspace:GetChildren()) do
-            if obj:IsA("Model") and obj ~= LocalPlayer.Character then
-                table.insert(searchList, obj)
-            end
-        end
-    end
+    for _, model in ipairs(candidates) do
+        local root = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model:FindFirstChildWhichIsA("BasePart")
+        if root then
+            local rootPos = root.Position
+            -- Distanță 2D pe planul XZ (ignoră diferențele de înălțime ale avatarului)
+            local dx = rootPos.X - chairPos.X
+            local dz = rootPos.Z - chairPos.Z
+            local horizDist = math.sqrt((dx * dx) + (dz * dz))
+            local vertDist = math.abs(rootPos.Y - chairPos.Y)
 
-    -- Caută modelul cel mai apropiat care are un obiect 'Order'
-    for _, model in ipairs(searchList) do
-        if model:IsA("Model") and model ~= LocalPlayer.Character then
-            local root = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model:FindFirstChildWhichIsA("BasePart")
-            if root then
-                local d = (root.Position - chair.Position).Magnitude
-                if d < minDistance then
-                    local order = model:FindFirstChild("Order")
-                    if order then
-                        local sObj = order:FindFirstChild("Style")
-                        local cObj = order:FindFirstChild("Color")
-                        if sObj and cObj then
-                            minDistance = d
-                            bestCustomer = model
-                            bestStyle = sObj.Value
-                            bestColor = cObj.Value
+            -- Orice client așezat pe scaun are horizDist < 3.0 și vertDist < 5.0
+            if horizDist < minHorizDist and vertDist < 5.0 then
+                -- Caută folderul Order
+                local order = model:FindFirstChild("Order") or model:FindFirstChildWhichIsA("Configuration") or model:FindFirstChild("ClientOrder")
+                if not order then
+                    for _, child in ipairs(model:GetChildren()) do
+                        if child.Name:lower():find("order") then
+                            order = child
+                            break
                         end
                     end
                 end
-            end
-        end
-    end
 
-    -- 3. Fallback: Căutare descendent direct cu numele "Order" lângă scaun
-    if not bestCustomer then
-        for _, desc in ipairs(Workspace:GetDescendants()) do
-            if desc.Name == "Order" and (desc:IsA("Folder") or desc:IsA("Configuration") or desc:IsA("Model")) then
-                local model = desc:FindFirstAncestorOfClass("Model")
-                if model and model ~= LocalPlayer.Character then
-                    local root = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Torso") or model:FindFirstChildWhichIsA("BasePart")
-                    if root then
-                        local d = (root.Position - chair.Position).Magnitude
-                        if d < minDistance then
-                            local sObj = desc:FindFirstChild("Style")
-                            local cObj = desc:FindFirstChild("Color")
-                            if sObj and cObj then
-                                minDistance = d
-                                bestCustomer = model
-                                bestStyle = sObj.Value
-                                bestColor = cObj.Value
-                            end
-                        end
+                if order then
+                    local sObj = order:FindFirstChild("Style") or order:FindFirstChild("HairStyle") or order:FindFirstChild("Hair")
+                    local cObj = order:FindFirstChild("Color") or order:FindFirstChild("HairColor")
+                    if sObj and cObj then
+                        minHorizDist = horizDist
+                        bestCustomer = model
+                        bestStyle = sObj.Value
+                        bestColor = cObj.Value
                     end
                 end
             end
@@ -625,74 +714,147 @@ local function findCustomerAtStation(station)
 end
 
 -- =========================================================================
--- FINALIZARE COMANDĂ (GUI CLICK + NETWORK)
+-- MOTOR DE BUTOANE (SURFACEGUI PE OGLINDĂ & PLAYERGUI)
 -- =========================================================================
 
-local function clickDoneOnScreen()
+local function scanHairButtons(station)
+    local result = {
+        Done = nil,
+        StylePrev = nil,
+        StyleNext = nil,
+        ColorPrev = nil,
+        ColorNext = nil,
+        AllButtons = {}
+    }
+
+    local sources = {}
+    if station then table.insert(sources, station) end
     local pg = LocalPlayer:FindFirstChild("PlayerGui")
-    if not pg then return false end
+    if pg then table.insert(sources, pg) end
 
-    local clicked = false
-    for _, desc in ipairs(pg:GetDescendants()) do
-        if desc:IsA("GuiButton") and desc.Visible and desc.AbsoluteSize.X > 15 and desc.AbsoluteSize.Y > 15 then
-            local bName = desc.Name:lower()
-            local bText = (desc:IsA("TextButton") and desc.Text:lower()) or ""
-            for _, c in ipairs(desc:GetChildren()) do
-                if c:IsA("TextLabel") and c.Text then bText = bText .. " " .. c.Text:lower() end
-            end
+    for _, root in ipairs(sources) do
+        for _, btn in ipairs(root:GetDescendants()) do
+            if btn:IsA("GuiButton") and not btn:IsDescendantOf(ScreenGui) then
+                table.insert(result.AllButtons, btn)
 
-            local isDone = bName:find("done") or bText:find("done") or
-                           bName:find("finish") or bText:find("finish") or
-                           bName:find("gata") or bText:find("gata") or
-                           bName:find("confirm") or bText:find("confirm") or
-                           bName:find("cut") or bText:find("cut")
-
-            -- Buton verde de acțiune
-            if not isDone and desc.BackgroundColor3 then
-                local col = desc.BackgroundColor3
-                if col.G > 0.55 and col.G > (col.R * 1.3) and not (bName:find("arrow") or bText:find("<") or bText:find(">")) then
-                    isDone = true
+                local name = btn.Name:lower()
+                local text = (btn:IsA("TextButton") and btn.Text:lower()) or ""
+                for _, c in ipairs(btn:GetChildren()) do
+                    if c:IsA("TextLabel") and c.Text then text = text .. " " .. c.Text:lower() end
                 end
-            end
 
-            if isDone then
-                local pos = desc.AbsolutePosition + (desc.AbsoluteSize / 2)
-                local x = math.floor(pos.X)
-                local y = math.floor(pos.Y)
+                -- Buton Done
+                local isDone = name:find("done") or text:find("done") or
+                               name:find("finish") or text:find("finish") or
+                               name:find("confirm") or text:find("confirm") or
+                               name:find("cut") or text:find("gata") or
+                               name:find("submit") or name:find("ok")
 
-                pcall(function()
-                    if firesignal then
-                        firesignal(desc.MouseButton1Down)
-                        firesignal(desc.MouseButton1Click)
-                        firesignal(desc.MouseButton1Up)
-                        firesignal(desc.Activated)
+                if not isDone and btn.BackgroundColor3 then
+                    local col = btn.BackgroundColor3
+                    if col.G > 0.55 and col.G > (col.R * 1.3) and not (name:find("arrow") or text:find("<") or text:find(">")) then
+                        isDone = true
                     end
-                end)
+                end
 
-                pcall(function()
-                    if VirtualInputManager then
-                        VirtualInputManager:SendMouseMoveEvent(x, y, game)
-                        task.wait(0.02)
-                        VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-                        task.wait(0.03)
-                        VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+                if isDone and not result.Done then
+                    result.Done = btn
+                end
+
+                -- Săgeți Stil
+                if name:find("style") or (btn.Parent and btn.Parent.Name:lower():find("style")) then
+                    if name:find("left") or name:find("prev") or text:find("<") or text:find("◀") then
+                        result.StylePrev = btn
+                    elseif name:find("right") or name:find("next") or text:find(">") or text:find("▶") then
+                        result.StyleNext = btn
                     end
-                end)
+                end
 
-                pcall(function()
-                    VirtualUser:CaptureController()
-                    VirtualUser:ClickButton1(Vector2.new(x, y))
-                end)
-
-                clicked = true
+                -- Săgeți Culoare
+                if name:find("color") or (btn.Parent and btn.Parent.Name:lower():find("color")) then
+                    if name:find("left") or name:find("prev") or text:find("<") or text:find("◀") then
+                        result.ColorPrev = btn
+                    elseif name:find("right") or name:find("next") or text:find(">") or text:find("▶") then
+                        result.ColorNext = btn
+                    end
+                end
             end
         end
     end
 
+    -- Fallback dacă butonul Done nu are nume specific
+    if not result.Done and #result.AllButtons > 0 then
+        for _, btn in ipairs(result.AllButtons) do
+            local bn = btn.Name:lower()
+            if not (bn:find("arrow") or bn:find("left") or bn:find("right") or bn:find("<") or bn:find(">")) then
+                result.Done = btn
+                break
+            end
+        end
+    end
+
+    return result
+end
+
+-- Declanșează click sigur pe un buton GUI
+local function clickButton(btn)
+    if not btn then return false end
+    local clicked = false
+
+    pcall(function()
+        if firesignal then
+            if btn.MouseButton1Click then firesignal(btn.MouseButton1Click) clicked = true end
+            if btn.Activated then firesignal(btn.Activated) clicked = true end
+            if btn.MouseButton1Down then
+                firesignal(btn.MouseButton1Down)
+                task.wait(0.02)
+                firesignal(btn.MouseButton1Up)
+                clicked = true
+            end
+        end
+    end)
+
+    pcall(function()
+        if VirtualInputManager and btn.AbsolutePosition and btn.AbsoluteSize then
+            local pos = btn.AbsolutePosition + (btn.AbsoluteSize / 2)
+            if pos.X > 0 and pos.Y > 0 then
+                VirtualInputManager:SendMouseMoveEvent(pos.X, pos.Y, game)
+                task.wait(0.02)
+                VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, true, game, 0)
+                task.wait(0.03)
+                VirtualInputManager:SendMouseButtonEvent(pos.X, pos.Y, 0, false, game, 0)
+                clicked = true
+            end
+        end
+    end)
+
     return clicked
 end
 
--- Trimitere payload de rețea JobCompleted
+-- Ascultător GLOBAL de click: Reține coordonata exactă când dai click manual pe Done!
+UserInputService.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        local x = input.Position.X
+        local y = input.Position.Y
+
+        -- Ignoră click-ul pe propria noastră fereastră UI
+        if Frame and Frame.Visible then
+            local p = Frame.AbsolutePosition
+            local s = Frame.AbsoluteSize
+            if x >= p.X and x <= p.X + s.X and y >= p.Y and y <= p.Y + s.Y then
+                return
+            end
+        end
+
+        -- Salvează coordonata de click pentru DONE
+        State.DoneClickPos = Vector2.new(x, y)
+        RowStatus.Text = string.format("🎯 DONE salvat la ecran: (%d, %d)! Preiau complet...", math.floor(x), math.floor(y))
+        RowStatus.TextColor3 = Color3.fromRGB(100, 255, 150)
+        print(string.format("[Stylez] Coordonate Done salvate: X=%d, Y=%d", math.floor(x), math.floor(y)))
+    end
+end)
+
+-- Trimitere payload de rețea JobCompleted (Strat backup)
 local function fireJobCompletedRemote(station, styleVal, colorVal)
     pcall(function()
         local rep = game:GetService("ReplicatedStorage")
@@ -727,90 +889,126 @@ local function fireJobCompletedRemote(station, styleVal, colorVal)
     end)
 end
 
+-- Executare completă DONE
+local function executeDone(station, styleVal, colorVal)
+    local buttons = scanHairButtons(station)
+
+    -- 1. Click pe butonul Done găsit pe SurfaceGui sau PlayerGui
+    if buttons.Done then
+        clickButton(buttons.Done)
+    end
+
+    -- 2. Click pe coordonatele înregistrate sau poziția butonului
+    local clickPos = State.DoneClickPos
+    if not clickPos and buttons.Done and buttons.Done.AbsolutePosition then
+        clickPos = buttons.Done.AbsolutePosition + (buttons.Done.AbsoluteSize / 2)
+    end
+
+    if clickPos then
+        local x = math.floor(clickPos.X)
+        local y = math.floor(clickPos.Y)
+        pcall(function()
+            if VirtualInputManager then
+                VirtualInputManager:SendMouseMoveEvent(x, y, game)
+                task.wait(0.02)
+                VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+                task.wait(0.03)
+                VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+            end
+        end)
+        pcall(function()
+            VirtualUser:CaptureController()
+            VirtualUser:ClickButton1(Vector2.new(x, y))
+        end)
+        pcall(function()
+            if mouse1click then mouse1click() end
+        end)
+    end
+
+    -- 3. Rețea JobCompleted ca backup
+    fireJobCompletedRemote(station, styleVal, colorVal)
+end
+
 -- =========================================================================
--- BUCALĂ PRINCIPALĂ DE LUCRU
+-- BUCALĂ PRINCIPALĂ DE AUTOMATIZARE (DETECTEAZĂ FIECARE CLIENT CONSECUTIV)
 -- =========================================================================
 
-local isProcessing = false
+local isWorkingLoop = false
 local function loopStep()
-    if not Config.Active or isProcessing then return end
-    isProcessing = true
+    if not Config.Active or isWorkingLoop then return end
+    isWorkingLoop = true
 
-    -- 1. Găsește postul cel mai apropiat de unde se află jucătorul ACUM
-    local station, dist = getNearestStationToPlayer()
+    -- Garantare eliberare lock la final
+    local function finishStep()
+        isWorkingLoop = false
+    end
+
+    -- 1. Verifică postul de lucru al jucătorului
+    local station, dist = getMyStation()
 
     if not station or dist > 14 then
         RowStation.Text = "📍 Post: Mergi lângă un scaun din salon..."
         RowStation.TextColor3 = Color3.fromRGB(255, 180, 100)
-        RowStatus.Text = "⚡ Stare: Aștept să te pui la un scaun"
+        RowStatus.Text = "⚡ Stare: Aștept să te așezi lângă un scaun"
         RowStatus.TextColor3 = Color3.fromRGB(200, 200, 210)
-        isProcessing = false
+        finishStep()
         return
     end
 
-    State.CurrentStation = station
     RowStation.Text = string.format("📍 Post: %s (la %d studs)", station.Name, math.floor(dist))
     RowStation.TextColor3 = Color3.fromRGB(120, 220, 160)
 
-    -- 2. Caută clientul sosit la acest scaun
-    local customer, styleVal, colorVal = findCustomerAtStation(station)
+    -- 2. Detectează STRICT clientul de la acest scaun (XZ < 3.0 studs)
+    local customer, styleVal, colorVal = getCustomerInChair(station)
 
     if customer and styleVal ~= nil and colorVal ~= nil then
-        local orderKey = tostring(customer) .. "_" .. tostring(styleVal) .. "_" .. tostring(colorVal)
+        State.CurrentCustomer = customer
+        RowClient.Text = "👤 Client: " .. customer.Name
+        RowOrder.Text = string.format("💇 Stil: #%s   |   🎨 Culoare: #%s", tostring(styleVal), tostring(colorVal))
 
-        -- Verifică dacă această comandă a fost deja servită
-        if State.LastServedOrderKey ~= orderKey then
-            State.CurrentCustomer = customer
-            State.CurrentStyle = styleVal
-            State.CurrentColor = colorVal
-
-            -- Afișare clară a clientului și a comenzii în interfață!
-            RowClient.Text = "👤 Client: " .. customer.Name
-            RowOrder.Text = string.format("💇 Stil: #%s   |   🎨 Culoare: #%s", tostring(styleVal), tostring(colorVal))
-            RowStatus.Text = "⚡ Client nou la scaun! Finalizez comanda..."
+        -- Verifică dacă acest client este nou (nu a fost încă servit)
+        if customer ~= State.LastServedCustomerInstance then
+            RowStatus.Text = "⚡ Client nou la scaun! Servesc..."
             RowStatus.TextColor3 = Color3.fromRGB(100, 220, 255)
 
             -- Așteaptă delay-ul setat
-            task.wait(math.clamp(Config.Delay or 0.8, 0.2, 3.0))
+            task.wait(math.clamp(Config.Delay or 0.8, 0.2, 2.5))
 
-            -- Finalizare comandă (GUI click + Network)
-            clickDoneOnScreen()
-            fireJobCompletedRemote(station, styleVal, colorVal)
-            task.wait(0.1)
-            clickDoneOnScreen()
+            -- Execută acțiunea de DONE
+            executeDone(station, styleVal, colorVal)
+            task.wait(0.15)
+            executeDone(station, styleVal, colorVal)
 
-            State.LastServedOrderKey = orderKey
+            -- Marchează clientul ca servit
+            State.LastServedCustomerInstance = customer
             State.TotalServed = State.TotalServed + 1
+            State.TotalEarned = State.TotalServed * 75
 
-            RowStatus.Text = "🎉 Comandă finalizată cu succes!"
+            RowStatus.Text = "🎉 DONE trimis! Aștept ca clientul să plece..."
             RowStatus.TextColor3 = Color3.fromRGB(120, 255, 150)
-            StatsText.Text = string.format("Total Serviți: %d   |   Bani: $%d", State.TotalServed, State.TotalServed * 75)
+            StatsText.Text = string.format("Total Serviți: %d   |   Bani Estimați: $%d", State.TotalServed, State.TotalEarned)
 
-            task.wait(0.6)
+            task.wait(0.4)
         else
-            -- Comanda este deja făcută, așteaptă ca clientul să plece din scaun
-            RowStatus.Text = "Aștept ca clientul servit să se ridice..."
+            RowStatus.Text = "⏳ Aștept ca clientul servit să se ridice..."
             RowStatus.TextColor3 = Color3.fromRGB(200, 200, 220)
         end
     else
-        -- Nu este niciun client în scaun în acest moment
+        -- Scaunul este gol (Clientul precedent a plecat sau încă vine)
         State.CurrentCustomer = nil
-        State.CurrentStyle = nil
-        State.CurrentColor = nil
-
-        RowClient.Text = "👤 Client: Aștept client la scaun..."
+        RowClient.Text = "👤 Client: Aștept următorul client..."
         RowOrder.Text = "💇 Stil: -   |   🎨 Culoare: -"
-        RowStatus.Text = "⚡ Stare: Scaun liber, aștept clientul..."
+        RowStatus.Text = "⚡ Stare: Scaun liber, vine următorul client..."
         RowStatus.TextColor3 = Color3.fromRGB(180, 180, 190)
 
-        -- Resetează cheia când scaunul este complet gol
-        State.LastServedOrderKey = nil
+        -- Resetează instanța pentru a detecta instant CLIENTUL URMĂTOR!
+        State.LastServedCustomerInstance = nil
     end
 
-    isProcessing = false
+    finishStep()
 end
 
--- Rulare buclă
+-- Buclă de rulare continuă
 table.insert(State.Connections, task.spawn(function()
     while true do
         task.wait(0.2)
@@ -824,7 +1022,7 @@ end))
 -- BUTOANE UI
 -- =========================================================================
 
--- Buton Start / Pauză
+-- Toggle Activ / Pauză
 ToggleBtn.MouseButton1Click:Connect(function()
     Config.Active = not Config.Active
 
@@ -834,7 +1032,7 @@ ToggleBtn.MouseButton1Click:Connect(function()
         Badge.BackgroundColor3 = Color3.fromRGB(25, 50, 35)
         BadgeLabel.TextColor3 = Color3.fromRGB(80, 255, 140)
         BadgeLabel.Text = "ACTIV"
-        RowStatus.Text = "⚡ Stare: Auto Hairdresser reluat!"
+        RowStatus.Text = "⚡ Stare: Auto Hairdresser activat!"
     else
         ToggleBtn.BackgroundColor3 = Color3.fromRGB(42, 42, 55)
         ToggleBtn.Text = "🔴 OPRIT (Click pentru Activare)"
@@ -843,7 +1041,6 @@ ToggleBtn.MouseButton1Click:Connect(function()
         BadgeLabel.Text = "PAUZĂ"
         RowStatus.Text = "⚡ Stare: Pus pe pauză"
 
-        -- Restaurează camera
         pcall(function()
             LocalPlayer.CameraMode = State.OriginalCameraMode or Enum.CameraMode.Classic
             LocalPlayer.CameraMinZoomDistance = 0.5
@@ -852,7 +1049,7 @@ ToggleBtn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Buton Ajustare la Scaun
+-- Buton Ajustare Laterală la Scaun
 AlignBtn.MouseButton1Click:Connect(function()
     local ok = alignToStation()
     if ok then
@@ -864,15 +1061,37 @@ end)
 
 -- Buton Done Manual
 DoneBtn.MouseButton1Click:Connect(function()
-    local clicked = clickDoneOnScreen()
-    if State.CurrentStation and State.CurrentStyle and State.CurrentColor then
-        fireJobCompletedRemote(State.CurrentStation, State.CurrentStyle, State.CurrentColor)
+    local st = State.CurrentStation or getMyStation()
+    local s, c = 1, 1
+    if State.CurrentCustomer then
+        local order = State.CurrentCustomer:FindFirstChild("Order")
+        if order then
+            local sObj = order:FindFirstChild("Style")
+            local cObj = order:FindFirstChild("Color")
+            if sObj then s = sObj.Value end
+            if cObj then c = cObj.Value end
+        end
     end
-    if clicked then
-        RowStatus.Text = "⚡ Done apăsat cu succes pe ecran! ✂️"
-    else
-        RowStatus.Text = "⚡ Am trimis comanda Done! ✂️"
-    end
+    executeDone(st, s, c)
+    RowStatus.Text = "⚡ Click Done trimis manual! ✂️"
+end)
+
+-- Butoane Săgeți pentru Schimbare Manuală pe Oglindă
+StylePrevBtn.MouseButton1Click:Connect(function()
+    local btns = scanHairButtons(State.CurrentStation)
+    if btns.StylePrev then clickButton(btns.StylePrev) end
+end)
+StyleNextBtn.MouseButton1Click:Connect(function()
+    local btns = scanHairButtons(State.CurrentStation)
+    if btns.StyleNext then clickButton(btns.StyleNext) end
+end)
+ColorPrevBtn.MouseButton1Click:Connect(function()
+    local btns = scanHairButtons(State.CurrentStation)
+    if btns.ColorPrev then clickButton(btns.ColorPrev) end
+end)
+ColorNextBtn.MouseButton1Click:Connect(function()
+    local btns = scanHairButtons(State.CurrentStation)
+    if btns.ColorNext then clickButton(btns.ColorNext) end
 end)
 
 -- Descărcare Script
@@ -893,4 +1112,4 @@ end
 CloseBtn.MouseButton1Click:Connect(unload)
 getgenv().StylezHairUnload = unload
 
-print("[Stylez Hairdresser] Script gata! Auto-Start activat. ✂️")
+print("[Stylez Hairdresser] Script încărcat cu succes! Detecție continuă activă. ✂️")
