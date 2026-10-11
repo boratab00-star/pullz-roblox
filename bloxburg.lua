@@ -917,15 +917,23 @@ createSlider(jobsPage, "Delivery Glide Speed", 30, 150, Config.DeliverySpeed, fu
     Config.DeliverySpeed = val
 end)
 
-createButton(jobsPage, "Teleport to Pizza Planet (Take Box)", function()
+createButton(jobsPage, "Teleport to Pizza Planet (Conveyor)", function()
     pcall(function()
         local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         if hrp then
-            local shelfPos = getPizzaShelfPosition()
-            hrp.CFrame = CFrame.new(shelfPos + Vector3.new(0, 3, 0))
+            local stationPos = getPizzaDeliveryStation()
+            hrp.CFrame = CFrame.new(stationPos + Vector3.new(0, 2.5, 0))
             task.wait(0.2)
             pcall(function()
-                for _, part in pairs(Workspace:GetPartBoundsInRadius(shelfPos, 10)) do
+                for _, prompt in pairs(Workspace:GetDescendants()) do
+                    if prompt:IsA("ProximityPrompt") then
+                        local pPos = prompt.Parent and prompt.Parent:GetPivot().Position
+                        if pPos and (pPos - stationPos).Magnitude < 15 then
+                            triggerPrompt(prompt)
+                        end
+                    end
+                end
+                for _, part in pairs(Workspace:GetPartBoundsInRadius(stationPos, 15)) do
                     interactWithObject(part)
                 end
             end)
@@ -936,16 +944,40 @@ end)
 createButton(jobsPage, "Teleport to Active Customer (Deliver)", function()
     pcall(function()
         local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        local customer = getActiveDeliveryCustomer()
+        local customer, prompt = getActiveDeliveryCustomer()
         if hrp and customer then
-            local custHrp = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head") or customer.PrimaryPart
-            if custHrp then
-                hrp.CFrame = CFrame.new(custHrp.Position + Vector3.new(0, 2, 2))
-                task.wait(0.2)
+            local targetPos = nil
+            if customer.FindFirstChild and (customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head")) then
+                local custRoot = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head")
+                targetPos = custRoot.Position + (custRoot.CFrame.LookVector * 3.5) + Vector3.new(0, 1.5, 0)
+            elseif customer.Position then
+                targetPos = customer.Position + Vector3.new(0, 1.5, 0)
+            else
+                targetPos = customer:GetPivot().Position + Vector3.new(0, 1.5, 0)
+            end
+
+            if targetPos then
+                hrp.CFrame = CFrame.new(targetPos)
+                task.wait(0.25)
+                if prompt then
+                    triggerPrompt(prompt)
+                end
                 interactWithObject(customer)
             end
         end
     end)
+end)
+
+createButton(jobsPage, "📍 Set Conveyor Here (My Current Spot)", function()
+    local hrp = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        State.SavedConveyorPos = hrp.Position
+        pcall(function()
+            local notif = Instance.new("Message", Workspace)
+            notif.Text = "Pizza Conveyor Spot Saved!"
+            task.delay(2, function() notif:Destroy() end)
+        end)
+    end
 end)
 
 createHeader(jobsPage, "Other Jobs & Automations")
@@ -1146,64 +1178,194 @@ end)
 -- =========================================================================
 
 -- Pizza Delivery Helper Functions
-local function getPizzaShelfPosition()
-    for _, obj in pairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart") or obj:IsA("Model") then
-            local n = obj.Name:lower()
-            if n:find("box") or n:find("shelf") or n:find("table") or n:find("pizzabox") then
-                local p = obj.Parent
-                local pn = p and p.Name:lower() or ""
-                if n:find("pizza") or pn:find("pizza") or pn:find("deliver") then
-                    return obj:GetPivot().Position
+local function getPizzaDeliveryStation()
+    -- Check if player already saved position
+    if State.SavedConveyorPos then
+        return State.SavedConveyorPos
+    end
+
+    -- 1. Search for ProximityPrompt on Conveyor / Pizza Boxes
+    for _, prompt in pairs(Workspace:GetDescendants()) do
+        if prompt:IsA("ProximityPrompt") then
+            local act = prompt.ActionText:lower()
+            local objt = prompt.ObjectText:lower()
+            local p = prompt.Parent
+            local pn = p and p.Name:lower() or ""
+
+            if (act:find("take") or act:find("grab") or act:find("pick") or act:find("get")) and
+               (objt:find("pizza") or objt:find("box") or pn:find("box") or pn:find("conveyor") or pn:find("dispenser")) then
+                if not pn:find("dough") and not pn:find("sauce") and not pn:find("cheese") and not pn:find("bake") and not pn:find("oven") and not pn:find("table") then
+                    local pos = p:GetPivot().Position
+                    State.SavedConveyorPos = pos
+                    return pos
                 end
             end
         end
     end
+
+    -- 2. Search for Conveyor Belt / Box Dispenser models
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") or obj:IsA("BasePart") then
+            local n = obj.Name:lower()
+            local p = obj.Parent
+            local pn = p and p.Name:lower() or ""
+
+            if n:find("conveyor") or n:find("dispenser") or n:find("boxstack") or n:find("pizzaboxstack") or (n:find("boxes") and (pn:find("pizza") or pn:find("delivery") or pn:find("planet"))) then
+                if not n:find("table") and not pn:find("table") and not n:find("bake") and not pn:find("bake") and not n:find("dough") then
+                    local pos = obj:GetPivot().Position
+                    State.SavedConveyorPos = pos
+                    return pos
+                end
+            end
+        end
+    end
+
+    -- 3. Search for pizza boxes on conveyor (parts/models named pizzabox / box)
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") or obj:IsA("BasePart") then
+            local n = obj.Name:lower()
+            local p = obj.Parent
+            local pn = p and p.Name:lower() or ""
+
+            if (n:find("pizzabox") or n == "pizza box" or (n:find("box") and pn:find("conveyor"))) then
+                if not n:find("table") and not pn:find("table") and not pn:find("bake") and not pn:find("dough") and not pn:find("oven") then
+                    local pos = obj:GetPivot().Position
+                    State.SavedConveyorPos = pos
+                    return pos
+                end
+            end
+        end
+    end
+
+    -- 4. Geolocation based on Mopeds outside Pizza Planet
+    local mopedSeat = findNearestMoped()
+    if mopedSeat then
+        for _, part in pairs(Workspace:GetPartBoundsInRadius(mopedSeat.Position, 90)) do
+            local n = part.Name:lower()
+            local pn = part.Parent and part.Parent.Name:lower() or ""
+            if (n:find("conveyor") or n:find("box") or pn:find("conveyor") or pn:find("box")) and not n:find("table") and not pn:find("table") and not n:find("bake") then
+                local pos = part:GetPivot().Position
+                State.SavedConveyorPos = pos
+                return pos
+            end
+        end
+    end
+
+    -- 5. Fallback if player character is inside Pizza Planet near mopeds
+    local char = LocalPlayer.Character
+    if char and char:FindFirstChild("HumanoidRootPart") then
+        local hrpPos = char.HumanoidRootPart.Position
+        if mopedSeat and (hrpPos - mopedSeat.Position).Magnitude < 90 then
+            State.SavedConveyorPos = hrpPos
+            return hrpPos
+        end
+    end
+
     return Vector3.new(1172, 14, 258)
 end
 
-local function getActiveDeliveryCustomer()
-    for _, obj in pairs(Workspace:GetDescendants()) do
-        if obj:IsA("BasePart") and (obj.Name == "Arrow" or obj.Name == "OrderArrow" or obj.Name == "Marker" or obj.Name:find("Delivery")) then
-            local p = obj.Parent
-            while p and p ~= Workspace do
-                if p:FindFirstChildOfClass("Humanoid") and p ~= LocalPlayer.Character then
-                    return p
-                end
-                p = p.Parent
-            end
-        end
-    end
+local function getPizzaShelfPosition()
+    return getPizzaDeliveryStation()
+end
 
-    for _, m in pairs(Workspace:GetChildren()) do
-        if m:IsA("Model") and m:FindFirstChildOfClass("Humanoid") and m ~= LocalPlayer.Character then
-            if m:FindFirstChild("Head") and (m.Head:FindFirstChildOfClass("BillboardGui") or m.Head:FindFirstChild("Arrow")) then
-                return m
-            end
-            for _, descendant in pairs(m:GetDescendants()) do
-                if descendant:IsA("ProximityPrompt") then
-                    local act = descendant.ActionText:lower()
-                    local objt = descendant.ObjectText:lower()
-                    if act:find("pizza") or objt:find("customer") or objt:find("order") then
-                        return m
+local function getActiveDeliveryCustomer()
+    local char = LocalPlayer.Character
+
+    -- 1. Check ALL ProximityPrompts in Workspace for Give/Deliver
+    for _, prompt in pairs(Workspace:GetDescendants()) do
+        if prompt:IsA("ProximityPrompt") then
+            local act = prompt.ActionText:lower()
+            local objt = prompt.ObjectText:lower()
+
+            if (act:find("give") or act:find("deliver") or act:find("hand") or act:find("drop")) or
+               (objt:find("pizza") or objt:find("customer") or objt:find("order") or objt:find("resident") or objt:find("client")) then
+                local model = prompt:FindFirstAncestorOfClass("Model")
+                if model and model ~= char then
+                    if model:FindFirstChildOfClass("Humanoid") or model:FindFirstChild("Head") or model:FindFirstChild("HumanoidRootPart") then
+                        return model, prompt
                     end
                 end
             end
         end
     end
 
-    local npcFolder = Workspace:FindFirstChild("NPCs") or Workspace:FindFirstChild("Characters")
-    if npcFolder then
-        for _, npc in pairs(npcFolder:GetChildren()) do
-            if npc:IsA("Model") and npc:FindFirstChildOfClass("Humanoid") and npc ~= LocalPlayer.Character then
-                if npc:FindFirstChild("Head") and npc.Head:FindFirstChildOfClass("BillboardGui") then
-                    return npc
+    -- 2. Find Navigation Arrow / Marker in Workspace
+    local arrowObj = nil
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") or obj:IsA("Model") then
+            local n = obj.Name:lower()
+            if (n:find("arrow") or n:find("orderarrow") or n:find("deliverymarker") or n == "marker" or n == "order" or n:find("target")) then
+                if not obj:IsDescendantOf(char) then
+                    arrowObj = obj
+                    break
                 end
             end
         end
     end
 
-    return nil
+    if arrowObj then
+        local arrowPos = arrowObj:GetPivot().Position
+        local closestNpc = nil
+        local closestDist = math.huge
+
+        for _, obj in pairs(Workspace:GetDescendants()) do
+            if obj:IsA("Model") and obj ~= char and obj:FindFirstChildOfClass("Humanoid") then
+                local root = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Head") or obj.PrimaryPart
+                if root then
+                    local d = (root.Position - arrowPos).Magnitude
+                    if d < 25 and d < closestDist then
+                        closestDist = d
+                        closestNpc = obj
+                    end
+                end
+            end
+        end
+
+        if closestNpc then
+            return closestNpc, nil
+        end
+
+        -- Stand-in customer at arrow position
+        local targetPos = arrowPos - Vector3.new(0, 4, 0)
+        local virtualCustomer = {
+            Position = targetPos,
+            CFrame = CFrame.new(targetPos),
+            GetPivot = function() return CFrame.new(targetPos) end,
+            FindFirstChild = function(_, name)
+                if name == "HumanoidRootPart" or name == "Head" then
+                    return { Position = targetPos, CFrame = CFrame.new(targetPos), LookVector = Vector3.new(0, 0, 1) }
+                end
+                return nil
+            end,
+            GetDescendants = function() return {} end
+        }
+        return virtualCustomer, nil
+    end
+
+    -- 3. BillboardGui / Order GUI on NPC Head
+    for _, gui in pairs(Workspace:GetDescendants()) do
+        if gui:IsA("BillboardGui") and not gui:IsDescendantOf(char) then
+            local model = gui:FindFirstAncestorOfClass("Model")
+            if model and model ~= char and model:FindFirstChildOfClass("Humanoid") then
+                return model, nil
+            end
+        end
+    end
+
+    -- 4. Check Beams connected to target
+    for _, beam in pairs(Workspace:GetDescendants()) do
+        if beam:IsA("Beam") then
+            local att1 = beam.Attachment1
+            if att1 and att1.Parent then
+                local model = att1.Parent:FindFirstAncestorOfClass("Model")
+                if model and model ~= char and model:FindFirstChildOfClass("Humanoid") then
+                    return model, nil
+                end
+            end
+        end
+    end
+
+    return nil, nil
 end
 
 local function findNearestMoped()
@@ -1346,12 +1508,30 @@ local function smoothGlideTo(targetPos, speed)
     rootPart.CFrame = CFrame.new(targetPos)
 end
 
+local function triggerPrompt(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return end
+    pcall(function()
+        if fireproximityprompt then
+            fireproximityprompt(prompt)
+        end
+    end)
+    pcall(function()
+        prompt:InputHoldBegin()
+        task.wait(prompt.HoldDuration or 0.1)
+        prompt:InputHoldEnd()
+    end)
+end
+
 local function interactWithObject(target)
     if not target then return end
     pcall(function()
+        if target:IsA("ProximityPrompt") then
+            triggerPrompt(target)
+            return
+        end
         for _, prompt in pairs(target:GetDescendants()) do
-            if prompt:IsA("ProximityPrompt") and fireproximityprompt then
-                fireproximityprompt(prompt)
+            if prompt:IsA("ProximityPrompt") then
+                triggerPrompt(prompt)
             end
             if prompt:IsA("ClickDetector") and fireclickdetector then
                 fireclickdetector(prompt)
@@ -1415,10 +1595,10 @@ local function runPizzaDeliveryStep()
     if not humanoid or not hrp or humanoid.Health <= 0 then return end
 
     local hasPizza, pizzaTool = hasPizzaBox()
-    local shelfPos = getPizzaShelfPosition()
+    local conveyorPos = getPizzaDeliveryStation()
     local parkingPos = Vector3.new(1148, 14, 265)
 
-    -- STAGE 1: We do not have pizza -> Go to Pizza Planet, dismount moped, take box
+    -- STAGE 1: We do not have pizza -> Go to Pizza Planet conveyor, dismount moped, take box
     if not hasPizza then
         -- If currently riding moped, drive to the parking lot in front of Pizza Planet
         if humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
@@ -1429,29 +1609,26 @@ local function runPizzaDeliveryStep()
             task.wait(0.35)
         end
 
-        -- Walk/glide inside Pizza Planet to shelf
-        smoothGlideTo(shelfPos + Vector3.new(0, 2.5, 0), Config.DeliverySpeed)
-        task.wait(0.2)
+        -- Walk/glide inside Pizza Planet directly to the conveyor belt (the one in the photo!)
+        smoothGlideTo(conveyorPos + Vector3.new(0, 2.5, 0), Config.DeliverySpeed)
+        task.wait(0.25)
 
-        -- Interact with shelf to take pizza box
+        -- Interact with conveyor / boxes to take pizza box
         pcall(function()
-            for _, part in pairs(Workspace:GetPartBoundsInRadius(shelfPos, 15)) do
-                interactWithObject(part)
-                if part.Parent then
-                    interactWithObject(part.Parent)
-                end
-            end
             for _, prompt in pairs(Workspace:GetDescendants()) do
                 if prompt:IsA("ProximityPrompt") then
-                    if (prompt.Parent:GetPivot().Position - shelfPos).Magnitude < 15 then
-                        if fireproximityprompt then
-                            fireproximityprompt(prompt)
-                        end
+                    local pPos = prompt.Parent and prompt.Parent:GetPivot().Position
+                    if pPos and (pPos - conveyorPos).Magnitude < 16 then
+                        triggerPrompt(prompt)
                     end
                 end
             end
+            for _, part in pairs(Workspace:GetPartBoundsInRadius(conveyorPos, 16)) do
+                interactWithObject(part)
+                if part.Parent then interactWithObject(part.Parent) end
+            end
         end)
-        task.wait(Config.WorkDelay or 0.6)
+        task.wait(Config.WorkDelay or 0.5)
 
     -- STAGE 2: We have pizza -> Go out to moped, mount it, and ride to customer!
     else
@@ -1461,7 +1638,7 @@ local function runPizzaDeliveryStep()
             task.wait(0.15)
         end
 
-        -- Check if mounted on moped; if not, go to moped and climb onto it
+        -- Check if mounted on moped; if not, go out to moped and climb on
         local isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
         if not isMounted then
             local mopedSeat = findNearestMoped()
@@ -1471,14 +1648,25 @@ local function runPizzaDeliveryStep()
             end
         end
 
-        -- Ride moped to active customer
-        local customer = getActiveDeliveryCustomer()
+        -- Ride moped directly to active customer
+        local customer, custPrompt = getActiveDeliveryCustomer()
         if customer then
-            local custHrp = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head") or customer.PrimaryPart
-            if custHrp then
-                local deliverPos = custHrp.Position + (custHrp.CFrame.LookVector * 3.5) + Vector3.new(0, 1.5, 0)
-                smoothGlideTo(deliverPos, Config.DeliverySpeed)
+            local targetPos = nil
+            if customer.FindFirstChild and (customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head")) then
+                local custRoot = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head")
+                targetPos = custRoot.Position + (custRoot.CFrame.LookVector * 3.5) + Vector3.new(0, 1.5, 0)
+            elseif customer.Position then
+                targetPos = customer.Position + Vector3.new(0, 1.5, 0)
+            else
+                targetPos = customer:GetPivot().Position + Vector3.new(0, 1.5, 0)
+            end
+
+            if targetPos then
+                smoothGlideTo(targetPos, Config.DeliverySpeed)
                 task.wait(0.3)
+                if custPrompt then
+                    triggerPrompt(custPrompt)
+                end
                 interactWithObject(customer)
                 task.wait(Config.WorkDelay or 0.6)
             end
