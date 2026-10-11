@@ -1882,61 +1882,62 @@ findNearestMoped = function()
     return nil
 end
 
--- Ultra-Fast Pizza Box Detection (Comprehensive)
+-- Ultra-Fast Pizza Box Detection (Accurate - No False Positives)
 hasPizzaBox = function()
     local char = LocalPlayer.Character
     if not char then return false, nil end
 
-    -- 1. Flag override
-    if State.HasPizza then
-        return true, nil
-    end
-
-    -- 2. Check tools in Character
+    -- 1. Check tools in Character or Backpack
     for _, item in ipairs(char:GetChildren()) do
         if item:IsA("Tool") then
-            return true, item
+            local n = item.Name:lower()
+            if n:find("pizza") or n:find("box") or n:find("delivery") or n:find("order") then
+                return true, item
+            end
         end
     end
 
-    -- 3. Check Backpack
     local bp = LocalPlayer:FindFirstChild("Backpack")
     if bp then
         for _, item in ipairs(bp:GetChildren()) do
             if item:IsA("Tool") then
-                return true, item
+                local n = item.Name:lower()
+                if n:find("pizza") or n:find("box") or n:find("delivery") or n:find("order") then
+                    return true, item
+                end
             end
         end
     end
 
-    -- 4. Check for any held model/part that is NOT a default body part or accessory
-    local defaultBodyParts = {
-        ["humanoidrootpart"] = true, ["head"] = true, ["uppertorso"] = true, ["lowertorso"] = true,
-        ["leftupperarm"] = true, ["leftlowerarm"] = true, ["lefthand"] = true,
-        ["rightupperarm"] = true, ["rightlowerarm"] = true, ["righthand"] = true,
-        ["leftupperleg"] = true, ["leftlowerleg"] = true, ["leftfoot"] = true,
-        ["rightupperleg"] = true, ["rightlowerleg"] = true, ["rightfoot"] = true,
-        ["torso"] = true, ["left arm"] = true, ["right arm"] = true, ["left leg"] = true, ["right leg"] = true
-    }
-
+    -- 2. Check held models/parts in character explicitly named pizza or box
     for _, item in ipairs(char:GetChildren()) do
-        local n = item.Name:lower()
-        if not defaultBodyParts[n] and not item:IsA("Accessory") and not item:IsA("Humanoid") and not item:IsA("LocalScript") and not item:IsA("Script") and not item:IsA("Shirt") and not item:IsA("Pants") and not item:IsA("BodyColors") and not item:IsA("Highlight") and not item:IsA("Folder") then
-            if item:IsA("Model") or item:IsA("BasePart") then
+        if item:IsA("Model") or item:IsA("BasePart") then
+            local n = item.Name:lower()
+            if (n:find("pizza") or n:find("box") or n:find("order")) and not (n:find("root") or n:find("torso") or n:find("head") or n:find("arm") or n:find("leg")) then
                 return true, item
             end
         end
     end
 
+    -- 3. Check hands specifically for held pizza box
     local hands = {char:FindFirstChild("RightHand"), char:FindFirstChild("Right Arm"), char:FindFirstChild("UpperTorso")}
     for _, h in ipairs(hands) do
         if h then
             for _, c in ipairs(h:GetChildren()) do
                 if c:IsA("BasePart") or c:IsA("Model") then
-                    return true, c
+                    local cn = c.Name:lower()
+                    if cn:find("pizza") or cn:find("box") or cn:find("delivery") or cn:find("order") then
+                        return true, c
+                    end
                 end
             end
         end
+    end
+
+    -- 4. Check if delivery arrow is already active in world (means Bloxburg gave us a pizza order!)
+    local arrowPos = getArrowPosition()
+    if arrowPos then
+        return true, nil
     end
 
     return false, nil
@@ -2049,43 +2050,42 @@ mountMoped = function(mopedSeat)
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not humanoid or not hrp or not mopedSeat then return false end
 
-    if humanoid.SeatPart == mopedSeat then
+    -- Already seated?
+    if humanoid.SeatPart == mopedSeat or humanoid.Sit then
         return true
     end
 
-    debugLog("MOPED", "Merg lângă scaunul mopedului...")
-    smoothGlideTo(mopedSeat.Position + Vector3.new(0, 2, 0), Config.DeliverySpeed)
-    task.wait(0.1)
+    debugLog("MOPED", "Merg lângă moped...")
+    smoothGlideTo(mopedSeat.Position + Vector3.new(0, 1.5, 0), Config.DeliverySpeed)
+    task.wait(0.15)
 
-    -- Sit on seat
-    debugLog("MOPED", "Urc pe moped (Seat:Sit)...")
-    hrp.CFrame = mopedSeat.CFrame + Vector3.new(0, 0.5, 0)
-    pcall(function()
-        mopedSeat:Sit(humanoid)
-    end)
-    task.wait(0.2)
+    -- In Bloxburg, trigger the moped's interactive prompt ([E] Use)
+    debugLog("MOPED", "Interacționez cu mopedul ([E] Use)...")
+    local mopedModel = mopedSeat:FindFirstAncestorOfClass("Model")
+    if mopedModel then
+        for _, p in ipairs(mopedModel:GetDescendants()) do
+            if p:IsA("ProximityPrompt") then
+                triggerPrompt(p)
+            end
+        end
+    end
+    triggerNearbyPrompts(mopedSeat.Position, 8)
+    simulatePressE(0.35)
+    task.wait(0.25)
 
-    -- If not seated, simulate press E to drive
-    if not humanoid.SeatPart then
-        simulatePressE(0.35)
+    -- If not yet seated, sit gently via Seat:Sit (without teleporting CFrame repeatedly)
+    if not humanoid.SeatPart and not humanoid.Sit then
+        pcall(function()
+            mopedSeat:Sit(humanoid)
+        end)
         task.wait(0.2)
     end
 
-    -- Touch interest backup
-    if not humanoid.SeatPart and firetouchinterest then
-        pcall(function()
-            firetouchinterest(hrp, mopedSeat, 0)
-            task.wait(0.05)
-            firetouchinterest(hrp, mopedSeat, 1)
-        end)
-        task.wait(0.15)
-    end
-
-    local seated = humanoid.SeatPart ~= nil
+    local seated = (humanoid.SeatPart ~= nil) or humanoid.Sit
     if seated then
         debugLog("MOPED", "Urcat pe moped cu succes! ✅", Color3.fromRGB(100, 255, 150))
     else
-        debugLog("MOPED", "⚠️ Nu s-a putut urca pe moped, reîncerc...", Color3.fromRGB(255, 180, 80))
+        debugLog("MOPED", "⚠️ Aștept să urce pe moped...", Color3.fromRGB(255, 180, 80))
     end
 
     return seated
@@ -2100,7 +2100,7 @@ runPizzaDeliveryStep = function()
     if not humanoid or not hrp or humanoid.Health <= 0 then return end
 
     local hasPizza, pizzaTool = hasPizzaBox()
-    local isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
+    local isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat")) or (humanoid.Sit and State.SavedMopedSeat and (hrp.Position - State.SavedMopedSeat.Position).Magnitude < 10)
 
     local boxSpot = State.SavedPizzaSpot or State.SavedConveyorPos or hrp.Position
     local mopedSpot = State.SavedMopedSpot or (boxSpot + Vector3.new(-30, 0, 15))
@@ -2111,7 +2111,7 @@ runPizzaDeliveryStep = function()
 
         -- If currently riding moped, drive to moped spot outside and dismount
         if isMounted then
-            debugLog("MOPED", "Cobor de pe moped pentru a merge la cutii...")
+            debugLog("MOPED", "Cobor de pe moped pentru a merge la bandă...")
             smoothGlideTo(mopedSpot + Vector3.new(0, 1.5, 0), Config.MopedSpeed or 38)
             task.wait(0.15)
             humanoid.Jump = true
@@ -2143,15 +2143,15 @@ runPizzaDeliveryStep = function()
             VirtualUser:ClickButton1(Vector2.new(vp.X / 2, vp.Y / 2))
         end)
 
-        task.wait(0.2)
-        simulatePressE(0.2)
-        task.wait(0.3)
+        task.wait(0.25)
+        simulatePressE(0.25)
+        task.wait(0.35)
 
         if hasPizzaBox() then
             State.HasPizza = true
             debugLog("PASUL 1", "Cutie de pizza luată cu succes! ✅", Color3.fromRGB(100, 255, 150))
         else
-            debugLog("PASUL 1", "Aștept cutia să apară pe bandă...", Color3.fromRGB(255, 200, 100))
+            debugLog("PASUL 1", "Aștept cutia să fie luată de pe bandă...", Color3.fromRGB(255, 200, 100))
         end
 
         task.wait(Config.WorkDelay or 0.3)
@@ -2167,7 +2167,7 @@ runPizzaDeliveryStep = function()
         end
 
         -- Check if mounted on moped; if not, MOVE OUTSIDE TO MOPED SPOT FIRST!
-        isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
+        isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat")) or (humanoid.Sit and State.SavedMopedSeat and (hrp.Position - State.SavedMopedSeat.Position).Magnitude < 10)
         if not isMounted then
             debugLog("MOPED", "Merg afară spre moped...")
             smoothGlideTo(mopedSpot + Vector3.new(0, 1.5, 0), Config.DeliverySpeed or 22)
@@ -2184,7 +2184,7 @@ runPizzaDeliveryStep = function()
             end
         end
 
-        isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat"))
+        isMounted = (humanoid.SeatPart ~= nil and humanoid.SeatPart:IsA("VehicleSeat")) or humanoid.Sit
         if isMounted then
             debugLog("MOPED", "Urcat pe moped cu succes! ✅", Color3.fromRGB(100, 255, 150))
         end
@@ -2223,7 +2223,7 @@ runPizzaDeliveryStep = function()
                 debugLog("LIVRARE", "🎉 Pizza livrată cu succes! Încep următoarea cursă! 🚀", Color3.fromRGB(100, 255, 150))
             end
         else
-            debugLog("AȘTEPTARE", "⚠️ Săgeata sau clientul nu a apărut încă. Aștept 0.5s...", Color3.fromRGB(255, 180, 80))
+            debugLog("AȘTEPTARE", "⚠️ Săgeata sau clientul se generează... Aștept 0.5s...", Color3.fromRGB(255, 180, 80))
             task.wait(0.5)
         end
     end
