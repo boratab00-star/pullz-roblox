@@ -55,6 +55,10 @@ local Lighting = game:GetService("Lighting")
 local VirtualUser = game:GetService("VirtualUser")
 local Stats = game:GetService("Stats")
 local HttpService = game:GetService("HttpService")
+local VirtualInputManager = nil
+pcall(function()
+    VirtualInputManager = game:GetService("VirtualInputManager")
+end)
 
 local LocalPlayer = Players.LocalPlayer
 if not LocalPlayer then
@@ -123,9 +127,14 @@ local State = {
     FlyBodyVelocity = nil,
     FlyBodyGyro = nil,
     SavedPizzaSpot = nil,
+    SavedPizzaCFrame = nil,
     SavedPizzaPrompt = nil,
     SavedMopedSpot = nil,
-    SavedConveyorPos = nil
+    SavedMopedSeat = nil,
+    SavedConveyorPos = nil,
+    LastCustomerSearch = 0,
+    CachedCustomer = nil,
+    CachedPrompt = nil
 }
 
 -- ScreenGui Setup (Multi-Executor Compatibility)
@@ -906,6 +915,10 @@ local movementPage = createTab("⚡ Movement")
 local visualsPage = createTab("👁️ Visuals")
 local settingsPage = createTab("⚙️ Settings")
 
+-- Forward Declarations for Delivery Engine
+local simulatePressE, triggerPrompt, triggerNearbyPrompts, interactWithObject
+local getActiveDeliveryCustomer, findNearestMoped, hasPizzaBox, smoothGlideTo, mountMoped, runPizzaDeliveryStep
+
 -- ==================== [CATEGORY 1: AUTO JOBS] ====================
 createHeader(jobsPage, "🍕 Pizza Delivery Automation")
 
@@ -937,17 +950,24 @@ createButton(jobsPage, "📍 PASUL 1: Setează Poziția Cutii Pizza (Unde ești 
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if hrp then
         State.SavedPizzaSpot = hrp.Position
+        State.SavedPizzaCFrame = hrp.CFrame
         State.SavedConveyorPos = hrp.Position
         State.SavedPizzaPrompt = nil
-        for _, p in pairs(Workspace:GetDescendants()) do
-            if p:IsA("ProximityPrompt") then
-                local pPos = p.Parent and p.Parent:GetPivot().Position
-                if pPos and (pPos - hrp.Position).Magnitude < 15 then
-                    State.SavedPizzaPrompt = p
-                    break
+
+        -- Instant local check without scanning whole workspace
+        pcall(function()
+            local nearby = Workspace:GetPartBoundsInRadius(hrp.Position, 16)
+            for _, part in ipairs(nearby) do
+                for _, p in ipairs(part:GetChildren()) do
+                    if p:IsA("ProximityPrompt") then
+                        State.SavedPizzaPrompt = p
+                        break
+                    end
                 end
+                if State.SavedPizzaPrompt then break end
             end
-        end
+        end)
+
         spotStatusLabel.Text = string.format("📍 Loc Cutie: SALVAT ✅ (X: %d, Y: %d, Z: %d)", math.floor(hrp.Position.X), math.floor(hrp.Position.Y), math.floor(hrp.Position.Z))
         spotStatusLabel.TextColor3 = Color3.fromRGB(100, 255, 150)
         pcall(function()
@@ -962,8 +982,25 @@ end)
 createButton(jobsPage, "🛵 PASUL 2: Setează Poziția Moped (Lângă moped)", function()
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
     if hrp then
         State.SavedMopedSpot = hrp.Position
+        State.SavedMopedSeat = nil
+
+        if hum and hum.SeatPart and hum.SeatPart:IsA("VehicleSeat") then
+            State.SavedMopedSeat = hum.SeatPart
+        else
+            pcall(function()
+                local nearby = Workspace:GetPartBoundsInRadius(hrp.Position, 25)
+                for _, part in ipairs(nearby) do
+                    if part:IsA("VehicleSeat") then
+                        State.SavedMopedSeat = part
+                        break
+                    end
+                end
+            end)
+        end
+
         pcall(function()
             local msg = Instance.new("Message", Workspace)
             msg.Text = "🛵 Locatia mopedului a fost salvata!"
@@ -1227,130 +1264,180 @@ local function getPizzaDeliveryStation()
     if State.SavedConveyorPos then
         return State.SavedConveyorPos
     end
-
-    -- 1. Search for ProximityPrompt on Conveyor / Pizza Boxes
-    for _, prompt in pairs(Workspace:GetDescendants()) do
-        if prompt:IsA("ProximityPrompt") then
-            local act = prompt.ActionText:lower()
-            local objt = prompt.ObjectText:lower()
-            local p = prompt.Parent
-            local pn = p and p.Name:lower() or ""
-
-            if (act:find("take") or act:find("grab") or act:find("pick") or act:find("get")) and
-               (objt:find("pizza") or objt:find("box") or pn:find("box") or pn:find("conveyor") or pn:find("dispenser")) then
-                if not pn:find("dough") and not pn:find("sauce") and not pn:find("cheese") and not pn:find("bake") and not pn:find("oven") and not pn:find("table") then
-                    local pos = p:GetPivot().Position
-                    if pos.Y > 5 then
-                        State.SavedPizzaSpot = pos
-                        return pos
-                    end
-                end
-            end
-        end
-    end
-
-    -- 2. Search for Conveyor Belt / Box Dispenser models
-    for _, obj in pairs(Workspace:GetDescendants()) do
-        if obj:IsA("Model") or obj:IsA("BasePart") then
-            local n = obj.Name:lower()
-            local p = obj.Parent
-            local pn = p and p.Name:lower() or ""
-
-            if n:find("conveyor") or n:find("dispenser") or n:find("boxstack") or n:find("pizzaboxstack") or (n:find("boxes") and (pn:find("pizza") or pn:find("delivery") or pn:find("planet"))) then
-                if not n:find("table") and not pn:find("table") and not n:find("bake") and not pn:find("bake") and not n:find("dough") then
-                    local pos = obj:GetPivot().Position
-                    if pos.Y > 5 then
-                        State.SavedPizzaSpot = pos
-                        return pos
-                    end
-                end
-            end
-        end
-    end
-
-    -- 3. Fallback to current player position so the player never falls under map
     local char = LocalPlayer.Character
     if char and char:FindFirstChild("HumanoidRootPart") then
-        local hrpPos = char.HumanoidRootPart.Position
-        State.SavedPizzaSpot = hrpPos
-        return hrpPos
+        return char.HumanoidRootPart.Position
     end
-
-    return Vector3.new(0, 50, 0)
+    return Vector3.new(0, 15, 0)
 end
 
 local function getPizzaShelfPosition()
     return getPizzaDeliveryStation()
 end
 
-local function getActiveDeliveryCustomer()
+-- Direct Keyboard E Simulation (Compatible with all executors & Roblox engines)
+simulatePressE = function(holdTime)
+    holdTime = holdTime or 0.3
+    pcall(function()
+        if VirtualInputManager then
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.E, false, game)
+            task.wait(holdTime)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.E, false, game)
+        end
+    end)
+    pcall(function()
+        if keypress and keyrelease then
+            keypress(0x45)
+            task.wait(holdTime)
+            keyrelease(0x45)
+        end
+    end)
+end
+
+-- Fast ProximityPrompt trigger without blocking thread
+triggerPrompt = function(prompt)
+    if not prompt or not prompt:IsA("ProximityPrompt") then return end
+    pcall(function()
+        if fireproximityprompt then
+            fireproximityprompt(prompt, 0)
+            fireproximityprompt(prompt, 1)
+        end
+    end)
+    pcall(function()
+        prompt:InputHoldBegin()
+        task.wait(0.15)
+        prompt:InputHoldEnd()
+    end)
+end
+
+-- Trigger any nearby prompts in local radius (No whole-workspace descendant scans)
+triggerNearbyPrompts = function(centerPos, maxDist)
+    maxDist = maxDist or 12
+    pcall(function()
+        local parts = Workspace:GetPartBoundsInRadius(centerPos, maxDist)
+        for _, part in ipairs(parts) do
+            for _, child in ipairs(part:GetChildren()) do
+                if child:IsA("ProximityPrompt") then
+                    triggerPrompt(child)
+                elseif child:IsA("ClickDetector") and fireclickdetector then
+                    pcall(function() fireclickdetector(child) end)
+                end
+            end
+        end
+    end)
+end
+
+-- Interact with object: triggers immediate prompts & presses E cleanly
+interactWithObject = function(target)
+    if not target then return end
+    pcall(function()
+        if target:IsA("ProximityPrompt") then
+            triggerPrompt(target)
+            return
+        end
+        for _, child in ipairs(target:GetChildren()) do
+            if child:IsA("ProximityPrompt") then
+                triggerPrompt(child)
+            elseif child:IsA("ClickDetector") and fireclickdetector then
+                pcall(function() fireclickdetector(child) end)
+            end
+        end
+    end)
+    simulatePressE(0.25)
+end
+
+-- Ultra-Fast Active Customer Finder (Zero Workspace:GetDescendants, throttled cache)
+getActiveDeliveryCustomer = function()
     local char = LocalPlayer.Character
     if not char then return nil, nil end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil, nil end
 
-    -- 1. Check ALL ProximityPrompts across Workspace for Give/Deliver/Pizza
-    for _, prompt in pairs(Workspace:GetDescendants()) do
-        if prompt:IsA("ProximityPrompt") then
-            local act = prompt.ActionText:lower()
-            local objt = prompt.ObjectText:lower()
+    local now = tick()
+    if State.CachedCustomer and State.CachedCustomer.Parent and (now - (State.LastCustomerSearch or 0) < 1.5) then
+        local cHead = State.CachedCustomer:FindFirstChild("Head") or State.CachedCustomer:FindFirstChild("HumanoidRootPart")
+        if cHead and cHead.Position.Y > 5 then
+            return State.CachedCustomer, State.CachedPrompt
+        end
+    end
 
-            if (act:find("give") or act:find("deliver") or act:find("hand")) or
-               (objt:find("pizza") or objt:find("customer") or objt:find("order")) then
-                local model = prompt:FindFirstAncestorOfClass("Model")
-                if model and model ~= char and model:FindFirstChildOfClass("Humanoid") then
-                    local root = model:FindFirstChild("HumanoidRootPart") or model:FindFirstChild("Head")
-                    if root and root.Position.Y > 5 and (root.Position - hrp.Position).Magnitude < 4000 then
-                        return model, prompt
+    State.LastCustomerSearch = now
+
+    -- 1. Check top-level Workspace children for Delivery Arrow
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        local n = obj.Name:lower()
+        if n == "arrow" or n == "deliveryarrow" or n == "orderarrow" or n == "pizzaarrow" then
+            local arrowPos = obj:GetPivot().Position
+            if arrowPos.Y > 5 then
+                local parts = Workspace:GetPartBoundsInRadius(arrowPos, 22)
+                for _, p in ipairs(parts) do
+                    local m = p:FindFirstAncestorOfClass("Model")
+                    if m and m ~= char and m:FindFirstChildOfClass("Humanoid") then
+                        State.CachedCustomer = m
+                        State.CachedPrompt = m:FindFirstChildWhichIsA("ProximityPrompt", true)
+                        return m, State.CachedPrompt
                     end
                 end
             end
         end
     end
 
-    -- 2. Check for NPC models that have an Arrow or BillboardGui on Head
-    for _, model in pairs(Workspace:GetDescendants()) do
-        if model:IsA("Model") and model ~= char and model:FindFirstChildOfClass("Humanoid") then
-            local head = model:FindFirstChild("Head")
-            local root = model:FindFirstChild("HumanoidRootPart") or head
-            if root and root.Position.Y > 5 and (root.Position - hrp.Position).Magnitude < 4000 then
-                if head and (head:FindFirstChildOfClass("BillboardGui") or head:FindFirstChild("Arrow")) then
-                    return model, nil
-                end
-                for _, d in pairs(model:GetChildren()) do
-                    local dn = d.Name:lower()
-                    if dn:find("arrow") or dn:find("order") or dn:find("delivery") or d:IsA("BillboardGui") then
-                        return model, nil
-                    end
-                end
-            end
-        end
-    end
-
-    -- 3. Check for standalone Arrow in Workspace directly above an NPC
-    for _, obj in pairs(Workspace:GetDescendants()) do
-        if (obj:IsA("BasePart") or obj:IsA("Model")) and not obj:IsDescendantOf(char) then
+    -- 2. Check Camera children for Arrow
+    if Camera then
+        for _, obj in ipairs(Camera:GetChildren()) do
             local n = obj.Name:lower()
-            if n == "arrow" or n == "orderarrow" or n == "deliveryarrow" or n == "pizzaarrow" then
+            if n:find("arrow") then
                 local arrowPos = obj:GetPivot().Position
-                if arrowPos.Y > 5 and (arrowPos - hrp.Position).Magnitude < 4000 then
-                    local bestNpc = nil
-                    local bestDist = math.huge
-                    for _, npc in pairs(Workspace:GetDescendants()) do
-                        if npc:IsA("Model") and npc ~= char and npc:FindFirstChildOfClass("Humanoid") then
-                            local nr = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head")
-                            if nr and nr.Position.Y > 5 then
-                                local d = (Vector3.new(nr.Position.X, 0, nr.Position.Z) - Vector3.new(arrowPos.X, 0, arrowPos.Z)).Magnitude
-                                if d < 18 and d < bestDist then
-                                    bestDist = d
-                                    bestNpc = npc
-                                end
-                            end
+                if arrowPos.Y > 5 then
+                    local parts = Workspace:GetPartBoundsInRadius(arrowPos, 22)
+                    for _, p in ipairs(parts) do
+                        local m = p:FindFirstAncestorOfClass("Model")
+                        if m and m ~= char and m:FindFirstChildOfClass("Humanoid") then
+                            State.CachedCustomer = m
+                            State.CachedPrompt = m:FindFirstChildWhichIsA("ProximityPrompt", true)
+                            return m, State.CachedPrompt
                         end
                     end
-                    if bestNpc then
-                        return bestNpc, nil
+                end
+            end
+        end
+    end
+
+    -- 3. Check dedicated NPC folders in Workspace
+    local npcFolders = {"NPCs", "Customers", "Citizens", "Work", "DeliveryNPCs", "Residents"}
+    for _, fName in ipairs(npcFolders) do
+        local f = Workspace:FindFirstChild(fName)
+        if f then
+            for _, npc in ipairs(f:GetChildren()) do
+                if npc:IsA("Model") and npc ~= char and npc:FindFirstChildOfClass("Humanoid") then
+                    local head = npc:FindFirstChild("Head")
+                    if head and (head:FindFirstChildOfClass("BillboardGui") or head:FindFirstChild("Arrow")) then
+                        State.CachedCustomer = npc
+                        State.CachedPrompt = npc:FindFirstChildWhichIsA("ProximityPrompt", true)
+                        return npc, State.CachedPrompt
                     end
+                end
+            end
+        end
+    end
+
+    -- 4. Check top-level models in Workspace
+    for _, model in ipairs(Workspace:GetChildren()) do
+        if model:IsA("Model") and model ~= char and model:FindFirstChildOfClass("Humanoid") then
+            local head = model:FindFirstChild("Head")
+            if head and (head:FindFirstChildOfClass("BillboardGui") or head:FindFirstChild("Arrow")) then
+                State.CachedCustomer = model
+                State.CachedPrompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+                return model, State.CachedPrompt
+            end
+            local prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+            if prompt then
+                local act = prompt.ActionText:lower()
+                local objt = prompt.ObjectText:lower()
+                if act:find("give") or act:find("deliver") or act:find("hand") or objt:find("customer") or objt:find("pizza") then
+                    State.CachedCustomer = model
+                    State.CachedPrompt = prompt
+                    return model, prompt
                 end
             end
         end
@@ -1359,96 +1446,113 @@ local function getActiveDeliveryCustomer()
     return nil, nil
 end
 
-local function findNearestMoped()
+-- Fast Nearest Moped Locator
+findNearestMoped = function()
     local char = LocalPlayer.Character
     if not char then return nil end
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil end
 
-    local closestSeat = nil
-    local closestDist = math.huge
-    local refPos = State.SavedPizzaSpot or State.SavedMopedSpot or hrp.Position
+    -- 1. Check cached seat
+    if State.SavedMopedSeat and State.SavedMopedSeat.Parent and State.SavedMopedSeat:IsA("VehicleSeat") then
+        local humanoid = char:FindFirstChildOfClass("Humanoid")
+        if State.SavedMopedSeat.Occupant == nil or (humanoid and State.SavedMopedSeat.Occupant == humanoid) then
+            return State.SavedMopedSeat
+        end
+    end
 
-    for _, obj in pairs(Workspace:GetDescendants()) do
-        if obj:IsA("VehicleSeat") then
-            local model = obj:FindFirstAncestorOfClass("Model")
-            local n = model and model.Name:lower() or obj.Name:lower()
-            local dToRef = (obj.Position - refPos).Magnitude
-            local dToHrp = (obj.Position - hrp.Position).Magnitude
+    -- 2. Check radius around SavedMopedSpot or character
+    local refPos = State.SavedMopedSpot or (State.SavedPizzaSpot and (State.SavedPizzaSpot + Vector3.new(-20, 0, 8))) or hrp.Position
+    local parts = Workspace:GetPartBoundsInRadius(refPos, 80)
+    for _, part in ipairs(parts) do
+        if part:IsA("VehicleSeat") and (part.Occupant == nil or part.Occupant == char:FindFirstChildOfClass("Humanoid")) then
+            State.SavedMopedSeat = part
+            return part
+        end
+    end
 
-            local isFree = (obj.Occupant == nil or (char:FindFirstChildOfClass("Humanoid") and obj.Occupant == char:FindFirstChildOfClass("Humanoid")))
-            if isFree and obj.Position.Y > 5 then
-                if n:find("moped") or n:find("scooter") or n:find("pizza") or n:find("delivery") or dToRef < 260 then
-                    if dToHrp < closestDist then
-                        closestDist = dToHrp
-                        closestSeat = obj
-                    end
+    -- 3. Check Workspace Vehicles folder
+    local vehiclesFolder = Workspace:FindFirstChild("Vehicles") or Workspace:FindFirstChild("DeliveryVehicles")
+    if vehiclesFolder then
+        for _, v in ipairs(vehiclesFolder:GetChildren()) do
+            local seat = v:FindFirstChildWhichIsA("VehicleSeat", true)
+            if seat and (seat.Occupant == nil or seat.Occupant == char:FindFirstChildOfClass("Humanoid")) then
+                State.SavedMopedSeat = seat
+                return seat
+            end
+        end
+    end
+
+    -- 4. Check top-level models in Workspace
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj:IsA("Model") then
+            local n = obj.Name:lower()
+            if n:find("moped") or n:find("scooter") or n:find("pizza") or n:find("delivery") then
+                local seat = obj:FindFirstChildWhichIsA("VehicleSeat", true)
+                if seat and (seat.Occupant == nil or seat.Occupant == char:FindFirstChildOfClass("Humanoid")) then
+                    State.SavedMopedSeat = seat
+                    return seat
                 end
             end
         end
     end
 
-    -- Fallback: Any unoccupied VehicleSeat near the player
-    if not closestSeat then
-        for _, obj in pairs(Workspace:GetDescendants()) do
-            if obj:IsA("VehicleSeat") and obj.Occupant == nil and obj.Position.Y > 5 then
-                local d = (obj.Position - hrp.Position).Magnitude
-                if d < 120 then
-                    closestSeat = obj
-                    break
-                end
-            end
-        end
-    end
-
-    return closestSeat
+    return nil
 end
 
-local function hasPizzaBox()
+-- Ultra-Fast Pizza Box Detection (Zero descendant scans, no lag)
+hasPizzaBox = function()
     local char = LocalPlayer.Character
     if not char then return false, nil end
 
-    -- Check character tools
-    for _, item in pairs(char:GetChildren()) do
+    -- 1. Check tools in Character
+    for _, item in ipairs(char:GetChildren()) do
         if item:IsA("Tool") then
             return true, item
         end
     end
 
-    -- Check backpack tools
+    -- 2. Check Backpack
     local bp = LocalPlayer:FindFirstChild("Backpack")
     if bp then
-        for _, item in pairs(bp:GetChildren()) do
+        for _, item in ipairs(bp:GetChildren()) do
             if item:IsA("Tool") then
                 return true, item
             end
         end
     end
 
-    -- Check welded objects / models in character
-    for _, item in pairs(char:GetChildren()) do
+    -- 3. Check welded boxes/models inside character
+    for _, item in ipairs(char:GetChildren()) do
         local n = item.Name:lower()
-        if (n:find("pizza") or n:find("box")) and (item:IsA("Model") or item:IsA("BasePart") or item:IsA("Accessory")) then
+        if (n:find("pizza") or n:find("box") or n:find("order") or n:find("deliver")) and 
+           (item:IsA("Model") or item:IsA("BasePart") or item:IsA("Accessory")) then
             return true, item
         end
     end
 
-    -- Check if active customer is present
-    if getActiveDeliveryCustomer() ~= nil then
-        return true, nil
+    local rightHand = char:FindFirstChild("RightHand") or char:FindFirstChild("Right Arm")
+    if rightHand then
+        for _, c in ipairs(rightHand:GetChildren()) do
+            local cn = c.Name:lower()
+            if cn:find("pizza") or cn:find("box") or cn:find("order") or cn:find("delivery") or cn:find("tool") then
+                return true, c
+            end
+        end
     end
 
     return false, nil
 end
 
-local function smoothGlideTo(targetPos, speed)
+-- Smooth Glide Function with Anti-Void floor clamping
+smoothGlideTo = function(targetPos, speed)
     local character = LocalPlayer.Character
     if not character then return end
     local humanoid = character:FindFirstChildOfClass("Humanoid")
     local rootPart = nil
     local isVehicle = false
 
-    -- Anti-Void Safety: Never glide below ground (Y must be > 5)
+    -- Anti-Void Safety: Target height must be valid
     if targetPos.Y < 5 then
         return
     end
@@ -1469,7 +1573,7 @@ local function smoothGlideTo(targetPos, speed)
     local dist = (targetPos - currentPos).Magnitude
     if dist < 2.5 then return end
 
-    local duration = math.clamp(dist / speed, 0.2, 10)
+    local duration = math.clamp(dist / speed, 0.15, 8)
 
     local bodyVel = rootPart:FindFirstChild("PullZ_GlideVel")
     if not bodyVel then
@@ -1484,7 +1588,7 @@ local function smoothGlideTo(targetPos, speed)
         local alpha = math.clamp((tick() - startTime) / duration, 0, 1)
         local nextPos = currentPos:Lerp(targetPos, alpha)
 
-        -- Clamp minimum height to prevent dipping into floor
+        -- Clamp minimum height to avoid getting stuck in terrain or road
         if nextPos.Y < 8 then
             nextPos = Vector3.new(nextPos.X, 8, nextPos.Z)
         end
@@ -1507,43 +1611,8 @@ local function smoothGlideTo(targetPos, speed)
     rootPart.CFrame = CFrame.new(targetPos)
 end
 
-local function triggerPrompt(prompt)
-    if not prompt or not prompt:IsA("ProximityPrompt") then return end
-    pcall(function()
-        if fireproximityprompt then
-            fireproximityprompt(prompt)
-        end
-    end)
-    pcall(function()
-        prompt:InputHoldBegin()
-        task.wait(prompt.HoldDuration or 0.1)
-        prompt:InputHoldEnd()
-    end)
-end
-
-local function interactWithObject(target)
-    if not target then return end
-    pcall(function()
-        if target:IsA("ProximityPrompt") then
-            triggerPrompt(target)
-            return
-        end
-        for _, prompt in pairs(target:GetDescendants()) do
-            if prompt:IsA("ProximityPrompt") then
-                triggerPrompt(prompt)
-            end
-            if prompt:IsA("ClickDetector") and fireclickdetector then
-                fireclickdetector(prompt)
-            end
-        end
-    end)
-    pcall(function()
-        VirtualUser:CaptureController()
-        VirtualUser:ClickButton1(Vector2.new(0, 0))
-    end)
-end
-
-local function mountMoped(mopedSeat)
+-- Mount Moped Helper
+mountMoped = function(mopedSeat)
     local char = LocalPlayer.Character
     if not char then return false end
     local humanoid = char:FindFirstChildOfClass("Humanoid")
@@ -1554,22 +1623,20 @@ local function mountMoped(mopedSeat)
         return true
     end
 
-    -- Walk/glide directly to moped seat
+    -- Walk/glide to moped seat
     smoothGlideTo(mopedSeat.Position + Vector3.new(0, 2, 0), Config.DeliverySpeed)
-    task.wait(0.15)
-
-    -- Teleport above seat and sit
-    hrp.CFrame = mopedSeat.CFrame + Vector3.new(0, 0.5, 0)
     task.wait(0.1)
+
+    -- Sit on seat
+    hrp.CFrame = mopedSeat.CFrame + Vector3.new(0, 0.5, 0)
     pcall(function()
         mopedSeat:Sit(humanoid)
     end)
-    task.wait(0.25)
+    task.wait(0.2)
 
-    -- If not seated, interact with vehicle model prompts
+    -- If not seated, simulate press E to drive
     if not humanoid.SeatPart then
-        local model = mopedSeat:FindFirstAncestorOfClass("Model")
-        interactWithObject(model or mopedSeat)
+        simulatePressE(0.3)
         task.wait(0.2)
     end
 
@@ -1580,13 +1647,14 @@ local function mountMoped(mopedSeat)
             task.wait(0.05)
             firetouchinterest(hrp, mopedSeat, 1)
         end)
-        task.wait(0.2)
+        task.wait(0.15)
     end
 
     return humanoid.SeatPart ~= nil
 end
 
-local function runPizzaDeliveryStep()
+-- Core Pizza Delivery Automation Step
+runPizzaDeliveryStep = function()
     local character = LocalPlayer.Character
     if not character then return end
     local humanoid = character:FindFirstChildOfClass("Humanoid")
@@ -1595,50 +1663,55 @@ local function runPizzaDeliveryStep()
 
     local hasPizza, pizzaTool = hasPizzaBox()
 
-    -- The exact spot saved by the user on the conveyor belt
     local boxSpot = State.SavedPizzaSpot or State.SavedConveyorPos or hrp.Position
     local mopedSpot = State.SavedMopedSpot or (boxSpot + Vector3.new(-20, 0, 8))
 
-    -- STAGE 1: We do not have pizza -> Go to saved pizza spot on conveyor, take box with E
+    -- STAGE 1: We do NOT have pizza -> Go to saved pizza spot, press E to take pizza box
     if not hasPizza then
         -- If currently riding moped, drive to moped spot outside and dismount
         if humanoid.SeatPart and humanoid.SeatPart:IsA("VehicleSeat") then
             smoothGlideTo(mopedSpot + Vector3.new(0, 1.5, 0), Config.MopedSpeed or 95)
-            task.wait(0.2)
+            task.wait(0.15)
             humanoid.Jump = true
-            task.wait(0.35)
+            task.wait(0.25)
         end
 
-        -- Walk/glide directly to the saved spot on the conveyor belt
-        smoothGlideTo(boxSpot + Vector3.new(0, 2, 0), Config.DeliverySpeed)
-        task.wait(0.25)
+        -- Walk/glide directly to saved pizza conveyor spot
+        smoothGlideTo(boxSpot + Vector3.new(0, 1.5, 0), Config.DeliverySpeed)
 
-        -- Interact / press E on conveyor prompt
+        -- Align rotation to face conveyor exactly as saved
+        if State.SavedPizzaCFrame then
+            hrp.CFrame = State.SavedPizzaCFrame
+        end
+        task.wait(0.1)
+
+        -- PRESS [E] TO TAKE PIZZA BOX (Simulate keypress E)
+        simulatePressE(0.35)
+
+        if State.SavedPizzaPrompt and State.SavedPizzaPrompt.Parent then
+            triggerPrompt(State.SavedPizzaPrompt)
+        end
+        triggerNearbyPrompts(boxSpot, 10)
+
+        -- Click center of screen where the conveyor box is positioned
         pcall(function()
-            if State.SavedPizzaPrompt and State.SavedPizzaPrompt.Parent then
-                triggerPrompt(State.SavedPizzaPrompt)
-            end
-            for _, prompt in pairs(Workspace:GetDescendants()) do
-                if prompt:IsA("ProximityPrompt") then
-                    local pPos = prompt.Parent and prompt.Parent:GetPivot().Position
-                    if pPos and (pPos - boxSpot).Magnitude < 16 then
-                        triggerPrompt(prompt)
-                    end
-                end
-            end
-            for _, part in pairs(Workspace:GetPartBoundsInRadius(boxSpot, 16)) do
-                interactWithObject(part)
-                if part.Parent then interactWithObject(part.Parent) end
-            end
+            VirtualUser:CaptureController()
+            local vp = Camera.ViewportSize
+            VirtualUser:ClickButton1(Vector2.new(vp.X / 2, vp.Y / 2))
         end)
-        task.wait(Config.WorkDelay or 0.5)
 
-    -- STAGE 2: We have pizza -> Go out to moped, mount it, and ride to customer!
+        task.wait(0.2)
+        -- Second quick tap of E in case conveyor required tap
+        simulatePressE(0.2)
+
+        task.wait(Config.WorkDelay or 0.4)
+
+    -- STAGE 2: We HAVE pizza -> Go out to moped, mount, and ride to customer!
     else
         -- Equip pizza if in backpack
         if pizzaTool and pizzaTool.Parent == LocalPlayer:FindFirstChild("Backpack") then
             humanoid:EquipTool(pizzaTool)
-            task.wait(0.15)
+            task.wait(0.1)
         end
 
         -- Check if mounted on moped; if not, go out to moped and climb on
@@ -1647,26 +1720,30 @@ local function runPizzaDeliveryStep()
             local mopedSeat = findNearestMoped()
             if mopedSeat then
                 mountMoped(mopedSeat)
-                task.wait(0.3)
+                task.wait(0.2)
             end
         end
 
-        -- Ride moped directly to active customer
+        -- Ride directly to active customer
         local customer, custPrompt = getActiveDeliveryCustomer()
         if customer then
             local custHrp = customer:FindFirstChild("HumanoidRootPart") or customer:FindFirstChild("Head") or customer.PrimaryPart
             if custHrp and custHrp.Position.Y > 5 then
                 local deliverPos = custHrp.Position + (custHrp.CFrame.LookVector * 3.5) + Vector3.new(0, 1.5, 0)
                 smoothGlideTo(deliverPos, Config.DeliverySpeed)
-                task.wait(0.3)
+                task.wait(0.2)
+
+                -- Press [E] to deliver pizza to customer!
+                simulatePressE(0.35)
                 if custPrompt then
                     triggerPrompt(custPrompt)
                 end
-                interactWithObject(customer)
-                task.wait(Config.WorkDelay or 0.6)
+                triggerNearbyPrompts(custHrp.Position, 8)
+
+                task.wait(Config.WorkDelay or 0.5)
             end
         else
-            task.wait(0.6)
+            task.wait(0.4)
         end
     end
 end
