@@ -2468,6 +2468,28 @@ local function clickGuiButton(btn, optionalPos)
     end)
 end
 
+-- Helper to identify styling arrows (Left/Right/< />/color)
+local function isArrowButton(btn)
+    if not btn then return false end
+    local n = btn.Name:lower()
+    local t = ""
+    if btn:IsA("TextButton") then t = btn.Text:lower() end
+    for _, child in ipairs(btn:GetChildren()) do
+        if child:IsA("TextLabel") and child.Text then t = t .. " " .. child.Text:lower() end
+    end
+    
+    if n:find("arrow") or n:find("left") or n:find("right") or n:find("prev") or n:find("next") or n:find("back") then
+        return true
+    end
+    if t:find("<") or t:find(">") or t:find("←") or t:find("→") or t:find("prev") or t:find("next") or t:find("left") or t:find("right") then
+        return true
+    end
+    if (n:find("color") or t:find("color")) and not (n:find("done") or n:find("finish") or n:find("confirm") or n:find("submit")) then
+        return true
+    end
+    return false
+end
+
 -- Find active Done Button on screen
 local function findActiveDoneButton()
     if State.CapturedDoneButton and isGuiElementOnScreen(State.CapturedDoneButton) then
@@ -2481,12 +2503,21 @@ local function findActiveDoneButton()
         if desc:IsA("GuiButton") and isGuiElementOnScreen(desc) then
             local bName = desc.Name:lower()
             local bText = (desc:IsA("TextButton") and desc.Text:lower()) or ""
-            if bName == "done" or bText == "done" or bName:find("done") or bText:find("done") or
-               bName:find("finish") or bText:find("finish") or bName:find("gata") or bText:find("gata") or
-               bName:find("orderdone") or bText:find("order done") or bName:find("submit") then
-                State.CapturedDoneButton = desc
-                State.IsHairLearned = true
-                return desc
+            for _, child in ipairs(desc:GetChildren()) do
+                if child:IsA("TextLabel") and child.Text then bText = bText .. " " .. child.Text:lower() end
+            end
+            if not isArrowButton(desc) then
+                if bName:find("done") or bText:find("done") or
+                   bName:find("finish") or bText:find("finish") or
+                   bName:find("gata") or bText:find("gata") or
+                   bName:find("confirm") or bText:find("confirm") or
+                   bName:find("submit") or bText:find("submit") or
+                   bName:find("cut") or bText:find("cut") or
+                   bName:find("action") or bName:find("order") then
+                    State.CapturedDoneButton = desc
+                    State.IsHairLearned = true
+                    return desc
+                end
             end
         end
     end
@@ -2506,7 +2537,7 @@ startHairLearning = function()
     State.LearnedClickPos = nil
     State.LastHairServiceTime = tick()
 
-    hairDebugLog("ÎNVĂȚARE", "👉 Tunde 1 client și apasă DONE! Scriptul va captura automat click-ul.", Color3.fromRGB(255, 200, 100))
+    hairDebugLog("ÎNVĂȚARE", "👉 Tunde 1 client și apasă DONE! Click-ul de finalizare va fi capturat automat.", Color3.fromRGB(255, 200, 100))
 
     if hairInputConn then pcall(function() hairInputConn:Disconnect() end) hairInputConn = nil end
     for _, conn in ipairs(hairButtonConnections) do pcall(function() conn:Disconnect() end) end
@@ -2518,49 +2549,38 @@ startHairLearning = function()
         State.IsHairLearned = true
         State.HairLearningMode = false
 
-        local btnName = btn and btn.Name or "Poziție Ecran"
-        hairDebugLog("SINCRONIZAT", string.format("🎉 DONE CAPTURAT cu succes! (%s la %d, %d). Preiau AUTO... ✂️", btnName, math.floor(clickPos.X), math.floor(clickPos.Y)), Color3.fromRGB(100, 255, 150))
+        local btnName = btn and btn.Name or "Coordonată Ecran"
+        hairDebugLog("SINCRONIZAT", string.format("🎉 DONE CAPTURAT! (%s la %d, %d). Preiau AUTO... ✂️", btnName, math.floor(clickPos.X), math.floor(clickPos.Y)), Color3.fromRGB(100, 255, 150))
 
         if hairInputConn then pcall(function() hairInputConn:Disconnect() end) hairInputConn = nil end
         for _, conn in ipairs(hairButtonConnections) do pcall(function() conn:Disconnect() end) end
         hairButtonConnections = {}
     end
 
-    -- 1. Global Screen Click Listener (Detectează orice click de mouse pe ecran)
+    -- 1. Global Screen Click Listener (Capturează orice click cu mouse-ul)
     hairInputConn = UserInputService.InputBegan:Connect(function(input, processed)
         if not State.HairLearningMode then return end
         if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
             local mPos = UserInputService:GetMouseLocation()
             local pg = LocalPlayer:FindFirstChild("PlayerGui")
-            local targetBtn = nil
-            local isDoneClick = false
+            local hitBtn = nil
 
             if pg then
                 local objects = pg:GetGuiObjectsAtPosition(mPos.X, mPos.Y)
                 for _, obj in ipairs(objects) do
-                    if obj:IsA("GuiButton") then
-                        targetBtn = obj
-                        local bName = obj.Name:lower()
-                        local bText = (obj:IsA("TextButton") and obj.Text:lower()) or ""
-                        if bName:find("done") or bText:find("done") or bName:find("finish") or bText:find("finish") or bName:find("gata") or bText:find("gata") or bName:find("order") or bName:find("submit") then
-                            isDoneClick = true
-                            break
-                        end
+                    local candidate = (obj:IsA("GuiButton") and obj) or obj:FindFirstAncestorWhichIsA("GuiButton")
+                    if candidate then
+                        hitBtn = candidate
+                        break
                     end
                 end
             end
 
-            -- Dacă este explicit butonul Done sau text Done:
-            if isDoneClick or (targetBtn and (targetBtn.Name:lower():find("done") or (targetBtn:IsA("TextButton") and targetBtn.Text:lower():find("done")))) then
-                onDoneCaptured(targetBtn, mPos)
+            if hitBtn and isArrowButton(hitBtn) then
+                hairDebugLog("CLICK", string.format("Ajustat stil: '%s' (Săgeată). Apasă pe Done când ești gata!", hitBtn.Name), Color3.fromRGB(200, 220, 255))
             else
-                -- Dacă a apăsat o săgeată de stil sau culoare, doar notificăm fără să oprim modul de învățare
-                if targetBtn then
-                    hairDebugLog("CLICK", string.format("Ajustat: '%s' (Apasă pe DONE când finalizezi frizura)", targetBtn.Name), Color3.fromRGB(200, 220, 255))
-                else
-                    -- Click direct pe ecran
-                    hairDebugLog("CLICK", string.format("Click la (%d, %d)... Apasă pe DONE!", math.floor(mPos.X), math.floor(mPos.Y)), Color3.fromRGB(200, 220, 255))
-                end
+                -- Orice alt click (pe buton de confirmare sau direct pe ecran la Done)
+                onDoneCaptured(hitBtn, mPos)
             end
         end
     end)
@@ -2570,17 +2590,15 @@ startHairLearning = function()
     if pg then
         local function hookBtn(btn)
             if not btn:IsA("GuiButton") then return end
-            local bName = btn.Name:lower()
-            local bText = (btn:IsA("TextButton") and btn.Text:lower()) or ""
-            local isDoneCandidate = bName:find("done") or bText:find("done") or bName:find("finish") or bText:find("finish") or bName:find("gata") or bText:find("gata") or bName:find("submit")
 
             local function onTrigger()
                 if State.HairLearningMode then
-                    if isDoneCandidate then
-                        local pos = btn.AbsolutePosition + (btn.AbsoluteSize / 2)
-                        onDoneCaptured(btn, pos)
+                    local pos = btn.AbsolutePosition + (btn.AbsoluteSize / 2)
+                    if isArrowButton(btn) then
+                        hairDebugLog("CLICK", string.format("Ajustat stil: '%s' (Săgeată)", btn.Name), Color3.fromRGB(200, 220, 255))
                     else
-                        hairDebugLog("CLICK", string.format("Ajustat: '%s' (Apasă pe DONE când finalizezi frizura)", btn.Name), Color3.fromRGB(200, 220, 255))
+                        -- Orice alt buton este DONE!
+                        onDoneCaptured(btn, pos)
                     end
                 end
             end
