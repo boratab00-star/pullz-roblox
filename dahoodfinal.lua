@@ -111,12 +111,13 @@ local function verifyKey(userKey)
         return false, "Connection error: " .. tostring(err)
     end
 
-    local status = getRes.StatusCode or getRes.Status
-    if status == 404 then
-        return false, "Access denied: Invalid license key."
+    local rawStatus = getRes.StatusCode or getRes.status_code or getRes.Status or getRes.status
+    local statusNum = tonumber(rawStatus) or (rawStatus and tonumber(tostring(rawStatus):match("%d+")))
+    if statusNum == 404 then
+        return false, "Access Denied: Invalid license key."
     end
-    if status and (status < 200 or status >= 300) then
-        return false, "Firebase error: HTTP " .. tostring(status)
+    if statusNum and (statusNum < 200 or statusNum >= 300) then
+        return false, "Access Denied: Invalid key (HTTP " .. tostring(statusNum) .. ")"
     end
 
     local bodyText = getRes.Body or getRes.body or ""
@@ -405,15 +406,17 @@ local function initAuthGateway(onSuccess)
 
     -- Status Label with Multiline TextWrapping (Never overflows!)
     local StatusLabel = Instance.new("TextLabel")
-    StatusLabel.Size = UDim2.new(0, 380, 0, 34)
-    StatusLabel.Position = UDim2.new(0.5, -190, 0, 122)
+    StatusLabel.Name = "StatusLabel"
+    StatusLabel.Size = UDim2.new(0, 390, 0, 36)
+    StatusLabel.Position = UDim2.new(0.5, -195, 0, 120)
     StatusLabel.BackgroundTransparency = 1
     StatusLabel.Text = ""
     StatusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
     StatusLabel.TextSize = 11
-    StatusLabel.Font = Enum.Font.GothamMedium
+    StatusLabel.Font = Enum.Font.GothamBold
     StatusLabel.TextWrapped = true
     StatusLabel.TextYAlignment = Enum.TextYAlignment.Center
+    StatusLabel.ZIndex = 10
     StatusLabel.Parent = KeySystemFrame
 
     -- Verify Button (Signature PullZ Sky Blue)
@@ -516,7 +519,15 @@ local function initAuthGateway(onSuccess)
         StatusLabel.Text = "Validating key with database..."
 
         task.spawn(function()
-            local success, message = verifyKey(inputKey)
+            local pcallOk, success, message = pcall(function()
+                return verifyKey(inputKey)
+            end)
+
+            if not pcallOk then
+                success = false
+                message = "Verification error: " .. tostring(success or "Failed to connect")
+            end
+
             if success then
                 StatusLabel.TextColor3 = Color3.fromRGB(46, 204, 113)
                 StatusLabel.Text = "✓ Access Granted! [" .. tostring(getgenv().PullZLicenseTier or "ACTIVE") .. "] Initializing..."
@@ -550,14 +561,16 @@ local function initAuthGateway(onSuccess)
                 onSuccess()
             else
                 StatusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
-                StatusLabel.Text = message or "Access denied."
-                VerifyBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+                StatusLabel.Text = tostring(message or "Access Denied: Invalid license key.")
+                VerifyBtn.BackgroundColor3 = Color3.fromRGB(255, 75, 75)
                 VerifyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-                VerifyBtn.Text = "Invalid Key!"
-                task.wait(1.5)
-                VerifyBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
-                VerifyBtn.TextColor3 = Color3.fromRGB(12, 12, 15)
-                VerifyBtn.Text = "Verify Key"
+                VerifyBtn.Text = "Access Denied!"
+                task.wait(1.8)
+                if VerifyBtn and VerifyBtn.Parent then
+                    VerifyBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+                    VerifyBtn.TextColor3 = Color3.fromRGB(12, 12, 15)
+                    VerifyBtn.Text = "Verify Key"
+                end
                 isVerifying = false
             end
         end)
