@@ -79,6 +79,8 @@ local function getClientHWID()
 end
 
 -- Firebase Firestore Key Verification Engine
+local SCRIPT_GAME_ID = "dahood"
+
 local function verifyKey(userKey)
     local cleanKey = string.upper(userKey:gsub("%s+", ""))
     if cleanKey == "" then
@@ -86,6 +88,7 @@ local function verifyKey(userKey)
     end
 
     if cleanKey == "PULLZ-DEV" or cleanKey == "PULLZ" or cleanKey == "DEV" then
+        getgenv().PullZLicenseTier = "DEVELOPER"
         return true, "Developer Bypass Authorized!", { is_dev = true }
     end
 
@@ -127,8 +130,30 @@ local function verifyKey(userKey)
     local hwid = fields.hwid and fields.hwid.stringValue or nil
     local durationSec = fields.duration_seconds and tonumber(fields.duration_seconds.integerValue) or nil
     local expiresAt = fields.expires_at and tonumber(fields.expires_at.integerValue) or nil
+    local keyType = fields.type and fields.type.stringValue or "24h"
+    local allowedGame = fields.game and fields.game.stringValue or "all"
     local nowTs = os.time()
 
+    -- 2. Game Scope Authorization Check
+    -- If key is single-game (e.g. "rivals"), reject in Da Hood!
+    if allowedGame ~= "all" and allowedGame:lower() ~= SCRIPT_GAME_ID then
+        return false, "Acces Respins: Cheia este doar pt " .. string.upper(allowedGame) .. "! Pentru Da Hood ai nevoie de o cheie dedicata sau All-Access."
+    end
+
+    -- 3. Determine License Tier Label
+    local tierLabel = "24H"
+    if keyType == "lifetime" or (fields.duration_seconds and fields.duration_seconds.nullValue) then
+        tierLabel = "LIFETIME"
+    elseif keyType == "30d" then
+        tierLabel = "30-DAY"
+    elseif keyType == "7d" then
+        tierLabel = "7-DAY"
+    else
+        tierLabel = "24H"
+    end
+    getgenv().PullZLicenseTier = tierLabel
+
+    -- 4. Check HWID and Expiration
     if isUsed then
         -- Enforce HWID Lock
         if hwid and hwid ~= myHWID then
@@ -492,7 +517,7 @@ local function initAuthGateway(onSuccess)
             local success, message = verifyKey(inputKey)
             if success then
                 StatusLabel.TextColor3 = Color3.fromRGB(46, 204, 113)
-                StatusLabel.Text = "✓ Access Granted! Initializing PullZ..."
+                StatusLabel.Text = "✓ Access Granted! [" .. tostring(getgenv().PullZLicenseTier or "ACTIVE") .. "] Initializing..."
                 VerifyBtn.BackgroundColor3 = Color3.fromRGB(100, 255, 150)
                 VerifyBtn.TextColor3 = Color3.fromRGB(12, 12, 15)
                 VerifyBtn.Text = "Success!"
@@ -1845,7 +1870,7 @@ end
 local Stats = game:GetService("Stats")
 local Watermark = Instance.new("Frame")
 Watermark.Name = "WatermarkHUD"
-Watermark.Size = UDim2.new(0, 250, 0, 30)
+Watermark.Size = UDim2.new(0, 310, 0, 30)
 Watermark.Position = UDim2.new(0, 14, 0, 14)
 Watermark.BackgroundColor3 = Color3.fromRGB(12, 12, 15)
 Watermark.BorderSizePixel = 0
@@ -1884,7 +1909,7 @@ table.insert(Connections, RunService.RenderStepped:Connect(function()
         pcall(function()
             ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
         end)
-        WatermarkLabel.Text = string.format("⚡ PULLZ | DA HOOD | %d FPS | %dms", fps, ping)
+        WatermarkLabel.Text = string.format("⚡ PULLZ | DA HOOD | %s | %d FPS | %dms", tostring(getgenv().PullZLicenseTier or "24H"), fps, ping)
         frameCount = 0
         lastFpsTime = now
     end
@@ -2759,7 +2784,7 @@ local diagText = Instance.new("TextLabel")
 diagText.Size = UDim2.new(1, -24, 1, 0)
 diagText.Position = UDim2.new(0, 12, 0, 0)
 diagText.BackgroundTransparency = 1
-diagText.Text = "Status: ACTIVE | Menu Toggle: [Insert] or Minimized Pill"
+diagText.Text = "Status: ACTIVE | Tier: " .. tostring(getgenv().PullZLicenseTier or "24H") .. " | Toggle: [Insert]"
 diagText.TextColor3 = Color3.fromRGB(100, 150, 255)
 diagText.Font = Enum.Font.GothamMedium
 diagText.TextSize = 12
@@ -2845,7 +2870,7 @@ getgenv().DaHoodSuiteUnload = function()
     print("[PullZ Da Hood] Suite cleanly unloaded.")
 end
 
-showNotification("PullZ Pro", "PullZ Da Hood Suite Ready! Hotkey: [Insert]", true)
+showNotification("PullZ Pro", "PullZ Da Hood Suite Ready! [" .. tostring(getgenv().PullZLicenseTier or "24H") .. "]", true)
 print("[PullZ Da Hood] Ultimate Automation Suite successfully initialized!")
 
 end -- end initMainHub
