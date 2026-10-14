@@ -57,7 +57,7 @@ local Players = game:GetService("Players")
 -- Firebase Firestore Gateway (Project: key-gen-4a3fb)
 local FIREBASE_PROJECT_ID = "key-gen-4a3fb"
 local FIREBASE_REST_URL = "https://firestore.googleapis.com/v1/projects/" .. FIREBASE_PROJECT_ID .. "/databases/(default)/documents/keys/"
-local FREE_KEY_URL = "http://localhost:8081/start-key?game=rivals"
+local FREE_KEY_URL = "https://pullzcheats.org/rivals.html"
 local KEY_CACHE_FILE = "pullz_key.txt"
 
 -- Universal Executor HTTP Requester
