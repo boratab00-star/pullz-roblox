@@ -31,7 +31,7 @@
          • Fullbright Lighting & Fog Cleaner
       ⚙️ 6. SUITE SETTINGS:
          • Sleek Cyber-Glassmorphism UI (Draggable, Minimizable, Clean Tabs)
-         • Toggle Keybind: [RightShift] or [Insert]
+         • Toggle Keybind: [Insert] or Minimized Pill
          • Zero-Leak Self-Destruct Unload Handler
     =============================================================================
 --]]
@@ -39,6 +39,546 @@
 if not game:IsLoaded() then
     game.Loaded:Wait()
 end
+
+-- =========================================================================
+-- [PULLZ PRO] SUPABASE AUTHENTICATION GATEWAY
+-- =========================================================================
+local HttpService = game:GetService("HttpService")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local Players = game:GetService("Players")
+
+-- Supabase REST Credentials (Configured from keypullz15.3.py)
+local SUPABASE_URL = "https://eytddrzmccgcusvumans.supabase.co"
+local SUPABASE_KEY = "sb_publishable_-H5Z_7cpQHrCOxJzcSO0QQ_h8ijsJoA"
+local FREE_KEY_URL = "https://pullzcheats.org/rivals.html"
+local KEY_CACHE_FILE = "pullz_key.txt"
+
+-- Universal Executor HTTP Requester
+local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request or (fluxus and fluxus.request)
+
+-- HWID Extraction
+local function getClientHWID()
+    local hwid = nil
+    pcall(function()
+        if gethwid then
+            hwid = gethwid()
+        elseif get_hwid then
+            hwid = get_hwid()
+        elseif syn and syn.get_hwid then
+            hwid = syn.get_hwid()
+        end
+    end)
+    if not hwid or hwid == "" then
+        pcall(function()
+            local RbxAnalyticsService = game:GetService("RbxAnalyticsService")
+            hwid = RbxAnalyticsService:GetClientId()
+        end)
+    end
+    return hwid or "UNKNOWN_HWID"
+end
+
+-- ISO 8601 Timestamp Parser
+local function parseIsoTimestamp(isoStr)
+    if not isoStr or type(isoStr) ~= "string" then return nil end
+    local year, month, day, hour, min, sec = isoStr:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
+    if year and month and day and hour and min and sec then
+        return os.time({
+            year = tonumber(year),
+            month = tonumber(month),
+            day = tonumber(day),
+            hour = tonumber(hour),
+            min = tonumber(min),
+            sec = tonumber(sec)
+        })
+    end
+    return nil
+end
+
+-- Supabase REST API Client
+local function supabaseRequest(endpoint, method, body)
+    if not httpRequest then
+        return { error = "Executor missing HTTP capability (request/syn.request)" }
+    end
+
+    local headers = {
+        ["apikey"] = SUPABASE_KEY,
+        ["Authorization"] = "Bearer " .. SUPABASE_KEY,
+        ["Content-Type"] = "application/json",
+        ["Prefer"] = "return=representation"
+    }
+
+    local payload = {
+        Url = SUPABASE_URL .. endpoint,
+        Method = method or "GET",
+        Headers = headers
+    }
+
+    if body then
+        payload.Body = HttpService:JSONEncode(body)
+    end
+
+    local response
+    local ok, err = pcall(function()
+        response = httpRequest(payload)
+    end)
+
+    if not ok or not response then
+        return { error = "Request failed: " .. tostring(err) }
+    end
+
+    local status = response.StatusCode or response.Status
+    if status and (status < 200 or status >= 300) then
+        return { error = "HTTP " .. tostring(status) }
+    end
+
+    local bodyText = response.Body or response.body or ""
+    if bodyText == "" then return {} end
+
+    local decodeOk, decoded = pcall(function()
+        return HttpService:JSONDecode(bodyText)
+    end)
+
+    if not decodeOk then
+        return { error = "Invalid JSON response" }
+    end
+
+    return decoded
+end
+
+-- Supabase Key Verification Engine
+local function verifyKey(userKey)
+    local cleanKey = string.upper(userKey:gsub("%s+", ""))
+    if cleanKey == "" then
+        return false, "Error: Key cannot be empty."
+    end
+
+    if cleanKey == "PULLZ-DEV" or cleanKey == "PULLZ" or cleanKey == "DEV" then
+        return true, "Developer Bypass Authorized!", { is_dev = true }
+    end
+
+    local myHWID = getClientHWID()
+    local res = supabaseRequest("/rest/v1/keys?key_string=eq." .. cleanKey, "GET")
+
+    if type(res) == "table" and res.error then
+        return false, "Connection error: " .. tostring(res.error)
+    end
+
+    if type(res) ~= "table" or #res == 0 then
+        return false, "Access denied: Invalid license key."
+    end
+
+    local keyData = res[1]
+
+    if keyData.is_used then
+        if keyData.hwid and keyData.hwid ~= myHWID then
+            return false, "Access denied: Key bound to another PC."
+        end
+
+        if keyData.used_at and keyData.duration_days then
+            local usedTime = parseIsoTimestamp(keyData.used_at)
+            if usedTime then
+                local expireTime = usedTime + (keyData.duration_days * 86400)
+                if os.time() > expireTime then
+                    return false, "Access denied: License key has expired."
+                end
+            end
+        end
+    else
+        local patchRes = supabaseRequest("/rest/v1/keys?key_string=eq." .. cleanKey, "PATCH", {
+            is_used = true,
+            hwid = myHWID,
+            used_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
+        })
+
+        if type(patchRes) == "table" and patchRes.error then
+            return false, "Failed to claim key: " .. tostring(patchRes.error)
+        end
+    end
+
+    return true, "Key validated successfully!", keyData
+end
+
+-- Key Local Cache
+local function getCachedKey()
+    if isfile and isfile(KEY_CACHE_FILE) and readfile then
+        local ok, content = pcall(readfile, KEY_CACHE_FILE)
+        if ok and content and content:gsub("%s+", "") ~= "" then
+            return content:gsub("%s+", "")
+        end
+    end
+    return nil
+end
+
+local function saveCachedKey(key)
+    if writefile then
+        pcall(writefile, KEY_CACHE_FILE, key)
+    end
+end
+
+local function clearCachedKey()
+    if isfile and isfile(KEY_CACHE_FILE) and delfile then
+        pcall(delfile, KEY_CACHE_FILE)
+    end
+end
+
+-- Authentication UI & Gatekeeper
+local function initAuthGateway(onSuccess)
+    -- Remove any existing Key GUI instance
+    if getgenv().PullZKeyGui then
+        pcall(function() getgenv().PullZKeyGui:Destroy() end)
+        getgenv().PullZKeyGui = nil
+    end
+
+    -- Fast-path: Check cached key first
+    local cached = getCachedKey()
+    if cached then
+        local isValid, msg = verifyKey(cached)
+        if isValid then
+            onSuccess()
+            return
+        else
+            clearCachedKey()
+        end
+    end
+
+    -- Create Sleek Key Authentication Modal (Signature PullZ Suite)
+    local KeyGui = Instance.new("ScreenGui")
+    KeyGui.Name = "PullZ_AuthGate_" .. tostring(math.random(10000, 99999))
+    KeyGui.ResetOnSpawn = false
+    KeyGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+    pcall(function()
+        if syn and syn.protect_gui then
+            syn.protect_gui(KeyGui)
+            KeyGui.Parent = CoreGui
+        elseif gethui then
+            KeyGui.Parent = gethui()
+        else
+            KeyGui.Parent = CoreGui
+        end
+    end)
+    if not KeyGui.Parent then
+        KeyGui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+    end
+    getgenv().PullZKeyGui = KeyGui
+
+    -- Signature PullZ Rainbow Rotating Border Frame (NO Dark Overlay!)
+    local KeySystemBorder = Instance.new("Frame")
+    KeySystemBorder.Name = "PullZ_KeySystem"
+    KeySystemBorder.Size = UDim2.new(0, 420, 0, 310)
+    KeySystemBorder.Position = UDim2.new(0.5, -210, 0.5, -155)
+    KeySystemBorder.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    KeySystemBorder.BorderSizePixel = 0
+    KeySystemBorder.Active = true
+    KeySystemBorder.Draggable = true
+    KeySystemBorder.Parent = KeyGui
+
+    local KeyBorderCorner = Instance.new("UICorner")
+    KeyBorderCorner.CornerRadius = UDim.new(0, 10)
+    KeyBorderCorner.Parent = KeySystemBorder
+
+    local KeyBorderGradient = Instance.new("UIGradient")
+    KeyBorderGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 200, 255)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(200, 100, 255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(150, 200, 255))
+    })
+    KeyBorderGradient.Parent = KeySystemBorder
+
+    local KeySystemFrame = Instance.new("Frame")
+    KeySystemFrame.Size = UDim2.new(1, -4, 1, -4)
+    KeySystemFrame.Position = UDim2.new(0, 2, 0, 2)
+    KeySystemFrame.BackgroundColor3 = Color3.fromRGB(12, 12, 15) -- Obsidian Dark
+    KeySystemFrame.BorderSizePixel = 0
+    KeySystemFrame.ClipsDescendants = true
+    KeySystemFrame.Parent = KeySystemBorder
+
+    local KeyCorner = Instance.new("UICorner")
+    KeyCorner.CornerRadius = UDim.new(0, 8)
+    KeyCorner.Parent = KeySystemFrame
+
+    -- Rotating Border Gradient Loop
+    task.spawn(function()
+        local rot = 0
+        while KeySystemBorder and KeySystemBorder.Parent do
+            rot = (rot + 1) % 360
+            if KeyBorderGradient then KeyBorderGradient.Rotation = rot end
+            task.wait(0.02)
+        end
+    end)
+
+    -- Close Button (X)
+    local KeyCloseBtn = Instance.new("TextButton")
+    KeyCloseBtn.Size = UDim2.new(0, 26, 0, 26)
+    KeyCloseBtn.Position = UDim2.new(1, -34, 0, 10)
+    KeyCloseBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    KeyCloseBtn.Text = "X"
+    KeyCloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    KeyCloseBtn.Font = Enum.Font.GothamBold
+    KeyCloseBtn.TextSize = 12
+    KeyCloseBtn.AutoButtonColor = true
+    KeyCloseBtn.Parent = KeySystemFrame
+
+    local KeyCloseCorner = Instance.new("UICorner")
+    KeyCloseCorner.CornerRadius = UDim.new(0, 6)
+    KeyCloseCorner.Parent = KeyCloseBtn
+
+    KeyCloseBtn.MouseButton1Click:Connect(function()
+        KeyGui:Destroy()
+        getgenv().PullZKeyGui = nil
+    end)
+
+    -- Title
+    local KeyTitle = Instance.new("TextLabel")
+    KeyTitle.Size = UDim2.new(1, 0, 0, 32)
+    KeyTitle.Position = UDim2.new(0, 0, 0, 18)
+    KeyTitle.BackgroundTransparency = 1
+    KeyTitle.Text = "PullZ Key System"
+    KeyTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
+    KeyTitle.Font = Enum.Font.GothamBlack
+    KeyTitle.TextSize = 22
+    KeyTitle.Parent = KeySystemFrame
+
+    local KeyTitleGradient = Instance.new("UIGradient")
+    KeyTitleGradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, Color3.fromRGB(150, 200, 255)),
+        ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 150, 255))
+    })
+    KeyTitleGradient.Rotation = 45
+    KeyTitleGradient.Parent = KeyTitle
+
+    local KeySubTitle = Instance.new("TextLabel")
+    KeySubTitle.Size = UDim2.new(1, 0, 0, 14)
+    KeySubTitle.Position = UDim2.new(0, 0, 0, 48)
+    KeySubTitle.BackgroundTransparency = 1
+    KeySubTitle.Text = "D A   H O O D   A U T H E N T I C A T I O N"
+    KeySubTitle.TextColor3 = Color3.fromRGB(100, 150, 255)
+    KeySubTitle.Font = Enum.Font.GothamBold
+    KeySubTitle.TextSize = 9
+    KeySubTitle.Parent = KeySystemFrame
+
+    -- Key Input Container
+    local InputFrame = Instance.new("Frame")
+    InputFrame.Size = UDim2.new(0, 320, 0, 42)
+    InputFrame.Position = UDim2.new(0.5, -160, 0, 76)
+    InputFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+    InputFrame.BorderSizePixel = 0
+    InputFrame.Parent = KeySystemFrame
+
+    local InputCorner = Instance.new("UICorner")
+    InputCorner.CornerRadius = UDim.new(0, 6)
+    InputCorner.Parent = InputFrame
+
+    local KeyBox = Instance.new("TextBox")
+    KeyBox.Size = UDim2.new(1, -64, 1, 0)
+    KeyBox.Position = UDim2.new(0, 12, 0, 0)
+    KeyBox.BackgroundTransparency = 1
+    KeyBox.PlaceholderText = "Paste your license key..."
+    KeyBox.PlaceholderColor3 = Color3.fromRGB(100, 105, 125)
+    KeyBox.Text = ""
+    KeyBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    KeyBox.TextSize = 12
+    KeyBox.Font = Enum.Font.Gotham
+    KeyBox.ClearTextOnFocus = false
+    KeyBox.Parent = InputFrame
+
+    local PasteBtn = Instance.new("TextButton")
+    PasteBtn.Size = UDim2.new(0, 46, 0, 28)
+    PasteBtn.Position = UDim2.new(1, -52, 0.5, -14)
+    PasteBtn.BackgroundColor3 = Color3.fromRGB(28, 32, 44)
+    PasteBtn.BorderSizePixel = 0
+    PasteBtn.Text = "PASTE"
+    PasteBtn.TextColor3 = Color3.fromRGB(100, 150, 255)
+    PasteBtn.TextSize = 10
+    PasteBtn.Font = Enum.Font.GothamBold
+    PasteBtn.Parent = InputFrame
+
+    local PasteCorner = Instance.new("UICorner")
+    PasteCorner.CornerRadius = UDim.new(0, 4)
+    PasteCorner.Parent = PasteBtn
+
+    PasteBtn.MouseButton1Click:Connect(function()
+        pcall(function()
+            if getclipboard then
+                KeyBox.Text = getclipboard()
+            end
+        end)
+    end)
+
+    -- Status Label
+    local StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Size = UDim2.new(0, 320, 0, 18)
+    StatusLabel.Position = UDim2.new(0.5, -160, 0, 124)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.Text = ""
+    StatusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
+    StatusLabel.TextSize = 11
+    StatusLabel.Font = Enum.Font.GothamMedium
+    StatusLabel.Parent = KeySystemFrame
+
+    -- Verify Button (Signature PullZ Sky Blue)
+    local VerifyBtn = Instance.new("TextButton")
+    VerifyBtn.Size = UDim2.new(0, 320, 0, 42)
+    VerifyBtn.Position = UDim2.new(0.5, -160, 0, 148)
+    VerifyBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+    VerifyBtn.BorderSizePixel = 0
+    VerifyBtn.Text = "Verify Key"
+    VerifyBtn.TextColor3 = Color3.fromRGB(12, 12, 15)
+    VerifyBtn.Font = Enum.Font.GothamBlack
+    VerifyBtn.TextSize = 15
+    VerifyBtn.Parent = KeySystemFrame
+
+    local VerifyCorner = Instance.new("UICorner")
+    VerifyCorner.CornerRadius = UDim.new(0, 6)
+    VerifyCorner.Parent = VerifyBtn
+
+    -- Get Free Key Button with Hover Effect
+    local GetKeyBtn = Instance.new("TextButton")
+    GetKeyBtn.Size = UDim2.new(0, 220, 0, 24)
+    GetKeyBtn.Position = UDim2.new(0.5, -110, 0, 202)
+    GetKeyBtn.BackgroundTransparency = 1
+    GetKeyBtn.Text = "Get your 24 hour key"
+    GetKeyBtn.TextColor3 = Color3.fromRGB(100, 150, 255)
+    GetKeyBtn.Font = Enum.Font.Gotham
+    GetKeyBtn.TextSize = 12
+    GetKeyBtn.Parent = KeySystemFrame
+
+    local GetKeyUnderline = Instance.new("Frame")
+    GetKeyUnderline.Size = UDim2.new(0, 120, 0, 1)
+    GetKeyUnderline.Position = UDim2.new(0.5, -60, 1, -2)
+    GetKeyUnderline.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+    GetKeyUnderline.BorderSizePixel = 0
+    GetKeyUnderline.Parent = GetKeyBtn
+
+    GetKeyBtn.MouseEnter:Connect(function()
+        TweenService:Create(GetKeyBtn, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(150, 200, 255)}):Play()
+        TweenService:Create(GetKeyUnderline, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(150, 200, 255), Size = UDim2.new(0, 140, 0, 1), Position = UDim2.new(0.5, -70, 1, -2)}):Play()
+    end)
+    GetKeyBtn.MouseLeave:Connect(function()
+        TweenService:Create(GetKeyBtn, TweenInfo.new(0.2), {TextColor3 = Color3.fromRGB(100, 150, 255)}):Play()
+        TweenService:Create(GetKeyUnderline, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(100, 150, 255), Size = UDim2.new(0, 120, 0, 1), Position = UDim2.new(0.5, -60, 1, -2)}):Play()
+    end)
+
+    GetKeyBtn.MouseButton1Click:Connect(function()
+        pcall(function()
+            if openurl then
+                openurl(FREE_KEY_URL)
+            elseif open_url then
+                open_url(FREE_KEY_URL)
+            elseif syn and syn.open_url then
+                syn.open_url(FREE_KEY_URL)
+            end
+        end)
+        pcall(function()
+            if setclipboard then
+                setclipboard(FREE_KEY_URL)
+            end
+        end)
+        GetKeyBtn.Text = "Opening Browser & Copied!"
+        task.delay(2.5, function()
+            if GetKeyBtn and GetKeyBtn.Parent then
+                GetKeyBtn.Text = "Get your 24 hour key"
+            end
+        end)
+    end)
+
+    -- HWID Indicator
+    local HwidLabel = Instance.new("TextLabel")
+    HwidLabel.Size = UDim2.new(1, -40, 0, 16)
+    HwidLabel.Position = UDim2.new(0, 20, 0, 238)
+    HwidLabel.BackgroundTransparency = 1
+    local hwidDisplay = getClientHWID()
+    if #hwidDisplay > 24 then
+        hwidDisplay = hwidDisplay:sub(1, 12) .. "..." .. hwidDisplay:sub(-8)
+    end
+    HwidLabel.Text = "HWID: " .. hwidDisplay
+    HwidLabel.TextColor3 = Color3.fromRGB(75, 80, 100)
+    HwidLabel.TextSize = 10
+    HwidLabel.Font = Enum.Font.Code
+    HwidLabel.Parent = KeySystemFrame
+
+    -- Verification Process
+    local isVerifying = false
+    local function executeVerification()
+        if isVerifying then return end
+        local inputKey = KeyBox.Text:gsub("%s+", "")
+        if inputKey == "" then
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
+            StatusLabel.Text = "Please enter or paste your license key."
+            return
+        end
+
+        isVerifying = true
+        VerifyBtn.Text = "Verifying..."
+        VerifyBtn.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
+        VerifyBtn.TextColor3 = Color3.fromRGB(150, 160, 180)
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 195, 0)
+        StatusLabel.Text = "Querying database..."
+
+        task.spawn(function()
+            local success, message = verifyKey(inputKey)
+            if success then
+                StatusLabel.TextColor3 = Color3.fromRGB(46, 204, 113)
+                StatusLabel.Text = "✓ Access Granted! Initializing PullZ..."
+                VerifyBtn.BackgroundColor3 = Color3.fromRGB(100, 255, 150)
+                VerifyBtn.TextColor3 = Color3.fromRGB(12, 12, 15)
+                VerifyBtn.Text = "Success!"
+                saveCachedKey(inputKey)
+
+                task.wait(0.5)
+                local fadeInfo = TweenInfo.new(0.4, Enum.EasingStyle.Sine, Enum.EasingDirection.Out)
+                TweenService:Create(KeySystemBorder, fadeInfo, {
+                    BackgroundTransparency = 1,
+                    Size = UDim2.new(0, 0, 0, 0),
+                    Position = UDim2.new(0.5, 0, 0.5, 0)
+                }):Play()
+                TweenService:Create(KeySystemFrame, fadeInfo, {BackgroundTransparency = 1}):Play()
+                for _, v in pairs(KeySystemFrame:GetChildren()) do
+                    if v:IsA("TextLabel") or v:IsA("TextButton") or v:IsA("TextBox") or v:IsA("Frame") then
+                        pcall(function()
+                            TweenService:Create(v, fadeInfo, {BackgroundTransparency = 1}):Play()
+                            if v:IsA("TextLabel") or v:IsA("TextButton") or v:IsA("TextBox") then
+                                TweenService:Create(v, fadeInfo, {TextTransparency = 1}):Play()
+                            end
+                        end)
+                    end
+                end
+
+                task.wait(0.4)
+                KeyGui:Destroy()
+                getgenv().PullZKeyGui = nil
+                onSuccess()
+            else
+                StatusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
+                StatusLabel.Text = message or "Access denied."
+                VerifyBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 100)
+                VerifyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+                VerifyBtn.Text = "Invalid Key!"
+                task.wait(1.5)
+                VerifyBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
+                VerifyBtn.TextColor3 = Color3.fromRGB(12, 12, 15)
+                VerifyBtn.Text = "Verify Key"
+                isVerifying = false
+            end
+        end)
+    end
+
+    VerifyBtn.MouseButton1Click:Connect(executeVerification)
+    KeyBox.FocusLost:Connect(function(enterPressed)
+        if enterPressed then
+            executeVerification()
+        end
+    end)
+end
+
+
+
+-- =========================================================================
+-- [PULLZ PRO] DA HOOD AUTOMATION & UI SUITE
+-- =========================================================================
+local function initMainHub()
+
 
 -- Clean previous instance if already running
 if getgenv and getgenv().DaHoodSuiteLoaded and getgenv().DaHoodSuiteUnload then
@@ -2247,7 +2787,7 @@ local diagText = Instance.new("TextLabel")
 diagText.Size = UDim2.new(1, -24, 1, 0)
 diagText.Position = UDim2.new(0, 12, 0, 0)
 diagText.BackgroundTransparency = 1
-diagText.Text = "Status: ACTIVE | Menu Toggle: [RightShift] or [Insert]"
+diagText.Text = "Status: ACTIVE | Menu Toggle: [Insert] or Minimized Pill"
 diagText.TextColor3 = Color3.fromRGB(100, 150, 255)
 diagText.Font = Enum.Font.GothamMedium
 diagText.TextSize = 12
@@ -2257,10 +2797,10 @@ diagText.Parent = diagCard
 -- Activate default tab
 switchTab("💰 Farming")
 
--- Toggle Keybind Handler ([RightShift] or [Insert])
+-- Toggle Keybind Handler ([Insert])
 table.insert(Connections, UserInputService.InputBegan:Connect(function(input, processed)
     if processed then return end
-    if input.KeyCode == Enum.KeyCode.RightShift or input.KeyCode == Enum.KeyCode.Insert then
+    if input.KeyCode == Enum.KeyCode.Insert then
         if MinimizedBtn.Visible then
             MinimizedBtn.Visible = false
             BorderFrame.Visible = true
@@ -2333,5 +2873,12 @@ getgenv().DaHoodSuiteUnload = function()
     print("[PullZ Da Hood] Suite cleanly unloaded.")
 end
 
-showNotification("PullZ Pro", "PullZ Da Hood Suite Ready! Hotkey: [RightShift]", true)
+showNotification("PullZ Pro", "PullZ Da Hood Suite Ready! Hotkey: [Insert]", true)
 print("[PullZ Da Hood] Ultimate Automation Suite successfully initialized!")
+
+end -- end initMainHub
+
+-- =========================================================================
+-- EXECUTE AUTHENTICATION GATEWAY
+-- =========================================================================
+initAuthGateway(initMainHub)
