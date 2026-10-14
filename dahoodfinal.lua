@@ -48,10 +48,10 @@ local CoreGui = game:GetService("CoreGui")
 local TweenService = game:GetService("TweenService")
 local Players = game:GetService("Players")
 
--- Supabase REST Credentials (Configured from keypullz15.3.py)
-local SUPABASE_URL = "https://eytddrzmccgcusvumans.supabase.co"
-local SUPABASE_KEY = "sb_publishable_-H5Z_7cpQHrCOxJzcSO0QQ_h8ijsJoA"
-local FREE_KEY_URL = "https://pullzcheats.org/rivals.html"
+-- Firebase Firestore Gateway (Project: key-gen-4a3fb)
+local FIREBASE_PROJECT_ID = "key-gen-4a3fb"
+local FIREBASE_REST_URL = "https://firestore.googleapis.com/v1/projects/" .. FIREBASE_PROJECT_ID .. "/databases/(default)/documents/keys/"
+local FREE_KEY_URL = "http://localhost:8081/start-key?game=dahood"
 local KEY_CACHE_FILE = "pullz_key.txt"
 
 -- Universal Executor HTTP Requester
@@ -78,75 +78,7 @@ local function getClientHWID()
     return hwid or "UNKNOWN_HWID"
 end
 
--- ISO 8601 Timestamp Parser
-local function parseIsoTimestamp(isoStr)
-    if not isoStr or type(isoStr) ~= "string" then return nil end
-    local year, month, day, hour, min, sec = isoStr:match("(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
-    if year and month and day and hour and min and sec then
-        return os.time({
-            year = tonumber(year),
-            month = tonumber(month),
-            day = tonumber(day),
-            hour = tonumber(hour),
-            min = tonumber(min),
-            sec = tonumber(sec)
-        })
-    end
-    return nil
-end
-
--- Supabase REST API Client
-local function supabaseRequest(endpoint, method, body)
-    if not httpRequest then
-        return { error = "Executor missing HTTP capability (request/syn.request)" }
-    end
-
-    local headers = {
-        ["apikey"] = SUPABASE_KEY,
-        ["Authorization"] = "Bearer " .. SUPABASE_KEY,
-        ["Content-Type"] = "application/json",
-        ["Prefer"] = "return=representation"
-    }
-
-    local payload = {
-        Url = SUPABASE_URL .. endpoint,
-        Method = method or "GET",
-        Headers = headers
-    }
-
-    if body then
-        payload.Body = HttpService:JSONEncode(body)
-    end
-
-    local response
-    local ok, err = pcall(function()
-        response = httpRequest(payload)
-    end)
-
-    if not ok or not response then
-        return { error = "Request failed: " .. tostring(err) }
-    end
-
-    local status = response.StatusCode or response.Status
-    if status and (status < 200 or status >= 300) then
-        return { error = "HTTP " .. tostring(status) }
-    end
-
-    local bodyText = response.Body or response.body or ""
-    if bodyText == "" then return {} end
-
-    local decodeOk, decoded = pcall(function()
-        return HttpService:JSONDecode(bodyText)
-    end)
-
-    if not decodeOk then
-        return { error = "Invalid JSON response" }
-    end
-
-    return decoded
-end
-
--- Supabase Key Verification Engine
+-- Firebase Firestore Key Verification Engine
 local function verifyKey(userKey)
     local cleanKey = string.upper(userKey:gsub("%s+", ""))
     if cleanKey == "" then
@@ -157,46 +89,86 @@ local function verifyKey(userKey)
         return true, "Developer Bypass Authorized!", { is_dev = true }
     end
 
-    local myHWID = getClientHWID()
-    local res = supabaseRequest("/rest/v1/keys?key_string=eq." .. cleanKey, "GET")
-
-    if type(res) == "table" and res.error then
-        return false, "Connection error: " .. tostring(res.error)
+    if not httpRequest then
+        return false, "Executor missing HTTP capability (request/syn.request)"
     end
 
-    if type(res) ~= "table" or #res == 0 then
+    local myHWID = getClientHWID()
+
+    -- 1. Query Firebase Firestore via direct REST API
+    local getRes
+    local ok, err = pcall(function()
+        getRes = httpRequest({
+            Url = FIREBASE_REST_URL .. cleanKey,
+            Method = "GET"
+        })
+    end)
+
+    if not ok or not getRes then
+        return false, "Connection error: " .. tostring(err)
+    end
+
+    local status = getRes.StatusCode or getRes.Status
+    if status == 404 then
         return false, "Access denied: Invalid license key."
     end
+    if status and (status < 200 or status >= 300) then
+        return false, "Firebase error: HTTP " .. tostring(status)
+    end
 
-    local keyData = res[1]
+    local bodyText = getRes.Body or getRes.body or ""
+    local decodeOk, doc = pcall(function() return HttpService:JSONDecode(bodyText) end)
+    if not decodeOk or not doc or not doc.fields then
+        return false, "Invalid database response."
+    end
 
-    if keyData.is_used then
-        if keyData.hwid and keyData.hwid ~= myHWID then
+    local fields = doc.fields
+    local isUsed = fields.is_used and fields.is_used.booleanValue or false
+    local hwid = fields.hwid and fields.hwid.stringValue or nil
+    local durationSec = fields.duration_seconds and tonumber(fields.duration_seconds.integerValue) or nil
+    local expiresAt = fields.expires_at and tonumber(fields.expires_at.integerValue) or nil
+    local nowTs = os.time()
+
+    if isUsed then
+        -- Enforce HWID Lock
+        if hwid and hwid ~= myHWID then
             return false, "Access denied: Key bound to another PC."
         end
 
-        if keyData.used_at and keyData.duration_days then
-            local usedTime = parseIsoTimestamp(keyData.used_at)
-            if usedTime then
-                local expireTime = usedTime + (keyData.duration_days * 86400)
-                if os.time() > expireTime then
-                    return false, "Access denied: License key has expired."
-                end
-            end
+        -- Enforce Expiration (if not lifetime)
+        if expiresAt and nowTs > expiresAt then
+            return false, "Access denied: License key has expired."
         end
     else
-        local patchRes = supabaseRequest("/rest/v1/keys?key_string=eq." .. cleanKey, "PATCH", {
-            is_used = true,
-            hwid = myHWID,
-            used_at = os.date("!%Y-%m-%dT%H:%M:%SZ")
+        -- First time claiming key: Bind HWID & compute expiration
+        local newExpiresAt = durationSec and (nowTs + durationSec) or nil
+        local patchFields = {
+            hwid = { stringValue = myHWID },
+            is_used = { booleanValue = true },
+            used_at = { integerValue = tostring(nowTs) }
+        }
+        local updateMask = "updateMask.fieldPaths=hwid&updateMask.fieldPaths=is_used&updateMask.fieldPaths=used_at"
+
+        if newExpiresAt then
+            patchFields.expires_at = { integerValue = tostring(newExpiresAt) }
+            updateMask = updateMask .. "&updateMask.fieldPaths=expires_at"
+        end
+
+        local patchPayload = HttpService:JSONEncode({ fields = patchFields })
+        local patchRes = httpRequest({
+            Url = FIREBASE_REST_URL .. cleanKey .. "?" .. updateMask,
+            Method = "PATCH",
+            Headers = { ["Content-Type"] = "application/json" },
+            Body = patchPayload
         })
 
-        if type(patchRes) == "table" and patchRes.error then
-            return false, "Failed to claim key: " .. tostring(patchRes.error)
+        local patchStatus = patchRes and (patchRes.StatusCode or patchRes.Status)
+        if not patchStatus or patchStatus < 200 or patchStatus >= 300 then
+            return false, "Failed to claim key: HTTP " .. tostring(patchStatus)
         end
     end
 
-    return true, "Key validated successfully!", keyData
+    return true, "Key validated successfully!", fields
 end
 
 -- Key Local Cache
