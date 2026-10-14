@@ -137,7 +137,7 @@ local function verifyKey(userKey)
     -- 2. Game Scope Authorization Check
     -- If key is single-game (e.g. "rivals"), reject in Da Hood!
     if allowedGame ~= "all" and allowedGame:lower() ~= SCRIPT_GAME_ID then
-        return false, "Acces Respins: Cheia este doar pt " .. string.upper(allowedGame) .. "! Pentru Da Hood ai nevoie de o cheie dedicata sau All-Access."
+        return false, "Access Denied: Key is for " .. string.upper(allowedGame) .. " only!\nGet a Da Hood key or an All-Access pass."
     end
 
     -- 3. Determine License Tier Label
@@ -263,8 +263,8 @@ local function initAuthGateway(onSuccess)
     -- Signature PullZ Rainbow Rotating Border Frame (NO Dark Overlay!)
     local KeySystemBorder = Instance.new("Frame")
     KeySystemBorder.Name = "PullZ_KeySystem"
-    KeySystemBorder.Size = UDim2.new(0, 420, 0, 310)
-    KeySystemBorder.Position = UDim2.new(0.5, -210, 0.5, -155)
+    KeySystemBorder.Size = UDim2.new(0, 440, 0, 330)
+    KeySystemBorder.Position = UDim2.new(0.5, -220, 0.5, -165)
     KeySystemBorder.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
     KeySystemBorder.BorderSizePixel = 0
     KeySystemBorder.Active = true
@@ -357,8 +357,8 @@ local function initAuthGateway(onSuccess)
 
     -- Key Input Container
     local InputFrame = Instance.new("Frame")
-    InputFrame.Size = UDim2.new(0, 320, 0, 42)
-    InputFrame.Position = UDim2.new(0.5, -160, 0, 76)
+    InputFrame.Size = UDim2.new(0, 360, 0, 42)
+    InputFrame.Position = UDim2.new(0.5, -180, 0, 74)
     InputFrame.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
     InputFrame.BorderSizePixel = 0
     InputFrame.Parent = KeySystemFrame
@@ -368,10 +368,10 @@ local function initAuthGateway(onSuccess)
     InputCorner.Parent = InputFrame
 
     local KeyBox = Instance.new("TextBox")
-    KeyBox.Size = UDim2.new(1, -64, 1, 0)
+    KeyBox.Size = UDim2.new(1, -70, 1, 0)
     KeyBox.Position = UDim2.new(0, 12, 0, 0)
     KeyBox.BackgroundTransparency = 1
-    KeyBox.PlaceholderText = "Paste your license key..."
+    KeyBox.PlaceholderText = "Paste license key..."
     KeyBox.PlaceholderColor3 = Color3.fromRGB(100, 105, 125)
     KeyBox.Text = ""
     KeyBox.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -381,8 +381,8 @@ local function initAuthGateway(onSuccess)
     KeyBox.Parent = InputFrame
 
     local PasteBtn = Instance.new("TextButton")
-    PasteBtn.Size = UDim2.new(0, 46, 0, 28)
-    PasteBtn.Position = UDim2.new(1, -52, 0.5, -14)
+    PasteBtn.Size = UDim2.new(0, 52, 0, 28)
+    PasteBtn.Position = UDim2.new(1, -58, 0.5, -14)
     PasteBtn.BackgroundColor3 = Color3.fromRGB(28, 32, 44)
     PasteBtn.BorderSizePixel = 0
     PasteBtn.Text = "PASTE"
@@ -403,21 +403,23 @@ local function initAuthGateway(onSuccess)
         end)
     end)
 
-    -- Status Label
+    -- Status Label with Multiline TextWrapping (Never overflows!)
     local StatusLabel = Instance.new("TextLabel")
-    StatusLabel.Size = UDim2.new(0, 320, 0, 18)
-    StatusLabel.Position = UDim2.new(0.5, -160, 0, 124)
+    StatusLabel.Size = UDim2.new(0, 380, 0, 34)
+    StatusLabel.Position = UDim2.new(0.5, -190, 0, 122)
     StatusLabel.BackgroundTransparency = 1
     StatusLabel.Text = ""
     StatusLabel.TextColor3 = Color3.fromRGB(255, 85, 85)
     StatusLabel.TextSize = 11
     StatusLabel.Font = Enum.Font.GothamMedium
+    StatusLabel.TextWrapped = true
+    StatusLabel.TextYAlignment = Enum.TextYAlignment.Center
     StatusLabel.Parent = KeySystemFrame
 
     -- Verify Button (Signature PullZ Sky Blue)
     local VerifyBtn = Instance.new("TextButton")
-    VerifyBtn.Size = UDim2.new(0, 320, 0, 42)
-    VerifyBtn.Position = UDim2.new(0.5, -160, 0, 148)
+    VerifyBtn.Size = UDim2.new(0, 360, 0, 42)
+    VerifyBtn.Position = UDim2.new(0.5, -180, 0, 162)
     VerifyBtn.BackgroundColor3 = Color3.fromRGB(100, 150, 255)
     VerifyBtn.BorderSizePixel = 0
     VerifyBtn.Text = "Verify Key"
@@ -432,8 +434,8 @@ local function initAuthGateway(onSuccess)
 
     -- Get Free Key Button with Hover Effect
     local GetKeyBtn = Instance.new("TextButton")
-    GetKeyBtn.Size = UDim2.new(0, 220, 0, 24)
-    GetKeyBtn.Position = UDim2.new(0.5, -110, 0, 202)
+    GetKeyBtn.Size = UDim2.new(0, 240, 0, 24)
+    GetKeyBtn.Position = UDim2.new(0.5, -120, 0, 218)
     GetKeyBtn.BackgroundTransparency = 1
     GetKeyBtn.Text = "Get your 24 hour key"
     GetKeyBtn.TextColor3 = Color3.fromRGB(100, 150, 255)
@@ -483,7 +485,7 @@ local function initAuthGateway(onSuccess)
     -- HWID Indicator
     local HwidLabel = Instance.new("TextLabel")
     HwidLabel.Size = UDim2.new(1, -40, 0, 16)
-    HwidLabel.Position = UDim2.new(0, 20, 0, 238)
+    HwidLabel.Position = UDim2.new(0, 20, 0, 254)
     HwidLabel.BackgroundTransparency = 1
     local hwidDisplay = getClientHWID()
     if #hwidDisplay > 24 then
@@ -511,7 +513,7 @@ local function initAuthGateway(onSuccess)
         VerifyBtn.BackgroundColor3 = Color3.fromRGB(40, 50, 70)
         VerifyBtn.TextColor3 = Color3.fromRGB(150, 160, 180)
         StatusLabel.TextColor3 = Color3.fromRGB(255, 195, 0)
-        StatusLabel.Text = "Querying database..."
+        StatusLabel.Text = "Validating key with database..."
 
         task.spawn(function()
             local success, message = verifyKey(inputKey)
